@@ -1,0 +1,20 @@
+node_modules
+.next
+out
+.env*
+!.env.example
+*.log
+*.tsbuildinfo
+
+# Local screenshots, test reports, and other artifacts may contain personal data.
+/artifacts/
+
+# Local deployment metadata and generated coverage.
+/.vercel/
+/coverage/
+
+# Private key files must never be committed.
+*.pem
+*.key
+*.p12
+*.pfx

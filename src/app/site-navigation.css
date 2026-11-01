@@ -1,0 +1,36 @@
+.shared-site-nav {
+  position: relative;
+  z-index: 20;
+  gap: 18px;
+}
+
+.shared-site-nav .nav-links {
+  gap: clamp(10px, 1.45vw, 22px);
+  white-space: nowrap;
+}
+
+.shared-site-nav .nav-links a[aria-current="page"]:not(.nav-cta) {
+  color: var(--deep);
+  font-weight: 700;
+}
+
+.shared-site-nav .nav-links .nav-cta {
+  gap: 7px;
+  padding: 11px 13px;
+}
+
+.shared-site-nav .nav-links .share-cta {
+  background: var(--deep);
+  color: #fff;
+  border-color: var(--deep);
+}
+
+.shared-site-nav .nav-links .share-cta:hover {
+  background: #1c352d;
+}
+
+@media (max-width: 640px) {
+  .shared-site-nav .nav-links {
+    white-space: normal;
+  }
+}
