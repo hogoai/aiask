@@ -15,8 +15,8 @@ import { PARTNER_ROLE_ID, validateAIASKOutput, type PartnerResponse, type Partne
 type IdeaStatus = "Saved" | "In progress" | "Done";
 type IdeaInboxFilter = "All" | "Inbox" | "In progress" | "Done" | "Archived";
 type IdeaRecord = { id: string; text: string; createdAt: string; updatedAt?: string; status?: IdeaStatus; nextStep?: string; progressUpdatedAt?: string };
-type PlannerEvent = { id: string; ideaId: string | null; todoId: string | null; title: string; scheduledDate: string; scheduledTime: string | null; description: string; priority?: TaskPriority; createdAt: string };
-type PlannerTodo = { id: string; ideaId: string | null; eventId: string | null; title: string; dueDate: string; status: "Open" | "Done"; priority?: TaskPriority; createdAt?: string; completedAt?: string; remindAt?: string; remindedAt?: string; reminderPending?: boolean };
+type PlannerEvent = { id: string; ideaId: string | null; todoId: string | null; title: string; scheduledDate: string; scheduledTime: string | null; description: string; priority?: TaskPriority; createdAt: string; origin?: "calendar" | "task-deadline" };
+type PlannerTodo = { id: string; ideaId: string | null; eventId: string | null; title: string; dueDate: string; status: "Open" | "Done"; priority?: TaskPriority; createdAt?: string; completedAt?: string; updatedAt?: string; remindAt?: string; remindedAt?: string; reminderPending?: boolean };
 type PlannerData = { events: PlannerEvent[]; todos: PlannerTodo[] };
 const AI_PARTNER_OPTIONS: { id: PartnerRole; name: string }[] = [
   { id: PARTNER_ROLE_ID.guide, name: "AI Guide" },
@@ -465,6 +465,7 @@ function HomeContent() {
           status: "Open",
           priority: "onTrack",
           createdAt: now,
+          updatedAt: now,
         };
         if (!persistPlanner({ ...plannerData, todos: [todo, ...plannerData.todos] })) {
           setCheckInSaveError("Progress was saved. The next step couldn’t be added to To-do. Please check your browser storage and try saving again.");
@@ -499,7 +500,7 @@ function HomeContent() {
     const now = new Date().toISOString();
     const eventId = crypto.randomUUID();
     const todoId = crypto.randomUUID();
-    const calendarEvent: PlannerEvent = { id: eventId, todoId, ideaId: eventIdeaId || null, title: eventTitle.trim(), scheduledDate: eventDate, scheduledTime: eventTime || null, description: eventTitle.trim(), priority: eventPriority, createdAt: now };
+    const calendarEvent: PlannerEvent = { id: eventId, todoId, ideaId: eventIdeaId || null, title: eventTitle.trim(), scheduledDate: eventDate, scheduledTime: eventTime || null, description: eventTitle.trim(), priority: eventPriority, createdAt: now, origin: "calendar" };
     const linkedTodo: PlannerTodo = { id: todoId, eventId, ideaId: eventIdeaId || null, title: eventTitle.trim(), dueDate: eventDate, status: "Open", priority: eventPriority, createdAt: now };
     if (persistPlanner({ events: [...plannerData.events, calendarEvent], todos: [...plannerData.todos, linkedTodo] })) {
       setSelectedCalendarDate(eventDate);
@@ -521,8 +522,8 @@ function HomeContent() {
     const now = new Date().toISOString();
     const todoId = crypto.randomUUID();
     const eventId = todoDueDate ? crypto.randomUUID() : null;
-    const todo: PlannerTodo = { id: todoId, eventId, ideaId: todoIdeaId || null, title: todoTitle.trim(), dueDate: todoDueDate, status: "Open", priority: todoPriority, createdAt: now, remindAt: reminderDate?.toISOString() };
-    const calendarEvent: PlannerEvent | null = eventId ? { id: eventId, todoId, ideaId: todoIdeaId || null, title: todo.title, scheduledDate: todoDueDate, scheduledTime: null, description: todo.title, priority: todoPriority, createdAt: now } : null;
+    const todo: PlannerTodo = { id: todoId, eventId, ideaId: todoIdeaId || null, title: todoTitle.trim(), dueDate: todoDueDate, status: "Open", priority: todoPriority, createdAt: now, updatedAt: now, remindAt: reminderDate?.toISOString() };
+    const calendarEvent: PlannerEvent | null = eventId ? { id: eventId, todoId, ideaId: todoIdeaId || null, title: todo.title, scheduledDate: todoDueDate, scheduledTime: null, description: todo.title, priority: todoPriority, createdAt: now, origin: "task-deadline" } : null;
     const nextPlanner: PlannerData = {
       todos: [todo, ...plannerData.todos],
       events: calendarEvent ? [...plannerData.events, calendarEvent] : plannerData.events,
@@ -619,14 +620,15 @@ function HomeContent() {
   function togglePlannerTodo(todoId: string) {
     const currentTodo = plannerData.todos.find(todo => todo.id === todoId);
     const now = new Date().toISOString();
-    const nextPlanner: PlannerData = { ...plannerData, todos: plannerData.todos.map(todo => todo.id === todoId ? { ...todo, status: todo.status === "Done" ? "Open" : "Done", completedAt: todo.status === "Done" ? undefined : now, reminderPending: todo.status === "Done" ? todo.reminderPending : false } : todo) };
+    const nextPlanner: PlannerData = { ...plannerData, todos: plannerData.todos.map(todo => todo.id === todoId ? { ...todo, status: todo.status === "Done" ? "Open" : "Done", completedAt: todo.status === "Done" ? undefined : now, updatedAt: now, reminderPending: todo.status === "Done" ? todo.reminderPending : false } : todo) };
     persistPlanner(nextPlanner);
     if (currentTodo?.status === "Open" && activeReminderId === todoId) dismissReminder();
   }
 
   function setTodoPriority(todoId: string, priority: TaskPriority) {
+    const now = new Date().toISOString();
     const nextPlanner: PlannerData = {
-      todos: plannerData.todos.map(item => item.id === todoId ? { ...item, priority } : item),
+      todos: plannerData.todos.map(item => item.id === todoId && item.priority !== priority ? { ...item, priority, updatedAt: now } : item),
       events: plannerData.events.map(event => event.todoId === todoId ? { ...event, priority } : event),
     };
     persistPlanner(nextPlanner);
@@ -636,9 +638,10 @@ function HomeContent() {
     const calendarEvent = plannerData.events.find(item => item.id === eventId);
     if (!calendarEvent) return;
     const linkedTodo = calendarEvent.todoId ? plannerData.todos.find(todo => todo.id === calendarEvent.todoId) : null;
+    const now = new Date().toISOString();
     const nextPlanner: PlannerData = {
       events: plannerData.events.map(event => event.id === eventId ? { ...event, priority } : event),
-      todos: linkedTodo ? plannerData.todos.map(todo => todo.id === linkedTodo.id ? { ...todo, priority } : todo) : plannerData.todos,
+      todos: linkedTodo ? plannerData.todos.map(todo => todo.id === linkedTodo.id && todo.priority !== priority ? { ...todo, priority, updatedAt: now } : todo) : plannerData.todos,
     };
     persistPlanner(nextPlanner);
   }

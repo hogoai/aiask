@@ -2,6 +2,7 @@
 
 import { useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { useLocale } from "next-intl";
 import { ChevronDown, Send, Sparkles } from "lucide-react";
 import MarkdownContent from "../partners/MarkdownContent";
 import { formatPartnerResponse } from "../../lib/ai/conversations";
@@ -81,6 +82,7 @@ function makeWorkspaceCoachContext(ideas: CoachIdea[], planner: CoachPlanner): A
 }
 
 export default function WorkspaceCoach({ ideas, planner, onShowHistory }: WorkspaceCoachProps) {
+  const locale = useLocale();
   const [messages, setMessages] = useState<CoachMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [contextEnabled, setContextEnabled] = useState(true);
@@ -104,7 +106,7 @@ export default function WorkspaceCoach({ ideas, planner, onShowHistory }: Worksp
     const sharedContext = contextEnabled && snapshotTotal > 0 ? snapshot : undefined;
     let body: Record<string, unknown>;
     if (retryRequest) {
-      body = { ...retryRequest.body };
+      body = { ...retryRequest.body, locale };
       if (retryRequest.conversationId) body.conversationId = retryRequest.conversationId;
       if (retryRequest.retryMessageId) body.retryMessageId = retryRequest.retryMessageId;
     } else if (isFollowUp) {
@@ -116,6 +118,7 @@ export default function WorkspaceCoach({ ideas, planner, onShowHistory }: Worksp
       ].slice(-8);
       body = {
         mode: "follow_up",
+        locale,
         partnerRole: PARTNER_ROLE_ID.actionPartner,
         userMessage: question,
         originalIdea: firstQuestion,
@@ -129,6 +132,7 @@ export default function WorkspaceCoach({ ideas, planner, onShowHistory }: Worksp
         partnerRole: PARTNER_ROLE_ID.actionPartner,
         userMessage: question,
         responseMode: "normal",
+        locale,
         ...(sharedContext ? { context: sharedContext } : {}),
       };
     }

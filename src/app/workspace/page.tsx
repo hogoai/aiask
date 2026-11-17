@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { ArrowRight, ArrowUpRight, BookOpen, CalendarDays, Check, ChevronDown, Circle, Compass, Lightbulb, ListTodo, MessageSquare, Search, Sparkles, Target, TrendingUp, X } from "lucide-react";
 import SiteNavigation from "../SiteNavigation";
 import MarkdownContent from "../partners/MarkdownContent";
@@ -9,16 +10,13 @@ import type { AIConversation, ConversationListItem } from "../../lib/ai/conversa
 import { PARTNER_ROLE_ID, type PartnerRole } from "../../lib/ai/contracts";
 import "./workspace.css";
 import WorkspaceCoach from "./WorkspaceCoach";
+import DailyCheckIn from "./DailyCheckIn";
+import WeeklyReview from "./WeeklyReview";
+import { emptyIdeas, emptyPlanner, IDEA_KEY, localDateKey, PLANNER_KEY, readWorkspaceRecords, toggleStoredTodo, type IdeaRecord, type IdeaStatus, type PlannerTodo, type WorkspaceRecords } from "../../lib/workspace/browser-records";
 
-type IdeaStatus = "Saved" | "In progress" | "Done";
-type IdeaRecord = { id: string; text: string; createdAt: string; updatedAt?: string; status?: IdeaStatus; nextStep?: string; progressUpdatedAt?: string };
-type PlannerEvent = { id: string; ideaId: string | null; todoId: string | null; title: string; scheduledDate: string; scheduledTime: string | null; description: string; createdAt: string };
-type PlannerTodo = { id: string; ideaId: string | null; eventId: string | null; title: string; dueDate: string; status: "Open" | "Done"; createdAt?: string; completedAt?: string };
-type PlannerData = { events: PlannerEvent[]; todos: PlannerTodo[] };
 type WorkspaceTab = "Overview" | "Ideas" | "Actions" | "Outcomes" | "Conversations";
 type IdeaFilter = "All" | IdeaStatus;
 
-const emptyPlanner: PlannerData = { events: [], todos: [] };
 const tabs: { label: WorkspaceTab; icon: typeof Compass }[] = [
   { label: "Overview", icon: Compass },
   { label: "Ideas", icon: Lightbulb },
@@ -47,10 +45,6 @@ function formatEventDate(value: string) {
   return new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" }).format(date);
 }
 
-function localDateKey(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
 function formatDateOnly(value: string) {
   const date = new Date(`${value}T12:00:00`);
   if (Number.isNaN(date.getTime())) return "Date unavailable";
@@ -60,9 +54,11 @@ function formatDateOnly(value: string) {
 function ideaStatus(idea: IdeaRecord): IdeaStatus { return idea.status ?? "Saved"; }
 
 export default function WorkspacePage() {
-  const [ready, setReady] = useState(false);
-  const [ideas, setIdeas] = useState<IdeaRecord[]>([]);
-  const [planner, setPlanner] = useState<PlannerData>(emptyPlanner);
+  const tReview = useTranslations("weeklyReview");
+  const [records, setRecords] = useState<WorkspaceRecords | null>(null);
+  const ready = records !== null;
+  const ideas = records?.ideas.data ?? emptyIdeas;
+  const planner = records?.planner.data ?? emptyPlanner;
   const [tab, setTab] = useState<WorkspaceTab>("Overview");
   const [ideaFilter, setIdeaFilter] = useState<IdeaFilter>("All");
   const [search, setSearch] = useState("");
@@ -81,22 +77,18 @@ export default function WorkspacePage() {
   const [followUpNotice, setFollowUpNotice] = useState("");
 
   useEffect(() => {
-    try {
-      const storedIdeas = window.localStorage.getItem("aiask-idea-box");
-      if (storedIdeas) {
-        const parsed: unknown = JSON.parse(storedIdeas);
-        if (Array.isArray(parsed)) setIdeas(parsed.filter((item): item is IdeaRecord => item && typeof item.id === "string" && typeof item.text === "string" && typeof item.createdAt === "string"));
-      }
-      const storedPlanner = window.localStorage.getItem("aiask-planner");
-      if (storedPlanner) {
-        const parsed: unknown = JSON.parse(storedPlanner);
-        if (parsed && typeof parsed === "object" && "events" in parsed && "todos" in parsed && Array.isArray(parsed.events) && Array.isArray(parsed.todos)) setPlanner({ events: parsed.events as PlannerEvent[], todos: parsed.todos as PlannerTodo[] });
-      }
-    } catch {
-      setError("We couldn’t read some saved workspace data in this browser.");
-    } finally {
-      setReady(true);
-    }
+    // Read each key independently, including when storage access itself is blocked.
+    const refresh = () => setRecords(readWorkspaceRecords({ getItem: key => window.localStorage.getItem(key) }));
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === IDEA_KEY || event.key === PLANNER_KEY) refresh();
+    };
+    refresh();
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", refresh);
+    };
   }, []);
 
   useEffect(() => {
@@ -286,11 +278,14 @@ export default function WorkspacePage() {
   }
 
   function toggleTodo(todoId: string) {
-    const now = new Date().toISOString();
-    const next: PlannerData = { ...planner, todos: planner.todos.map(todo => todo.id === todoId ? { ...todo, status: todo.status === "Done" ? "Open" : "Done", completedAt: todo.status === "Done" ? undefined : now } : todo) };
     try {
-      window.localStorage.setItem("aiask-planner", JSON.stringify(next));
-      setPlanner(next);
+      const storage = window.localStorage;
+      if (!toggleStoredTodo(storage, todoId)) {
+        setRecords(readWorkspaceRecords(storage));
+        setError("That action couldn’t be saved. Please check your browser storage and try again.");
+        return;
+      }
+      setRecords(readWorkspaceRecords(storage));
       setError("");
     } catch {
       setError("That action couldn’t be saved. Please check your browser storage and try again.");
@@ -322,6 +317,7 @@ export default function WorkspacePage() {
         {error && <p className="workspace-error" role="alert">{error}</p>}
         {!ready ? <div className="workspace-loading"><span className="workspace-loading-dot" /> Gathering your thoughts and plans…</div> : <>
           {tab === "Overview" && <>
+            {records && <DailyCheckIn records={records} />}
             <section className="workspace-stats" aria-label="Workspace summary">
               <article><span className="stat-icon ideas-stat"><Lightbulb size={16} /></span><p>Saved thoughts</p><strong>{ideas.length}</strong><small>Ideas, questions, and possibilities</small></article>
               <article><span className="stat-icon active-stat"><Target size={16} /></span><p>In motion</p><strong>{inProgressIdeas.length}</strong><small>Thoughts with an active next step</small></article>
@@ -381,7 +377,7 @@ export default function WorkspacePage() {
                 {upcomingEvents.length === 0 ? <p className="workspace-panel-empty">No calendar plans ahead. Keep your schedule open until something needs a time.</p> : <div className="coming-list">{upcomingEvents.slice(0, 4).map(event => <div className="coming-event" key={event.id}><time>{formatEventDate(event.scheduledDate)}</time><div><b>{event.title}</b><small>{event.scheduledTime ?? "Any time"}{event.ideaId && ideas.find(idea => idea.id === event.ideaId) ? ` · ${ideas.find(idea => idea.id === event.ideaId)?.text}` : ""}</small></div></div>)}</div>}
               </section>
 
-              <section className="workspace-panel outcome-panel"><div className="workspace-panel-heading"><div><span className="panel-kicker">LOOKING BACK</span><h2>Progress &amp; outcomes</h2></div><button type="button" className="panel-link" onClick={() => setTab("Outcomes")}>Review <ArrowRight size={13} /></button></div>
+              <section className="workspace-panel outcome-panel"><div className="workspace-panel-heading"><div><span className="panel-kicker">LOOKING BACK</span><h2>Progress &amp; outcomes</h2></div><button type="button" className="panel-link" onClick={() => setTab("Outcomes")}>{tReview("title")} <ArrowRight size={13} /></button></div>
                 {outcomes.length === 0 && completedTasks.length === 0 ? <p className="workspace-panel-empty">Completed work and check-ins will gather here over time. There’s no pressure to turn every thought into a finished project.</p> : <div className="outcome-list">{outcomes.slice(0, 3).map(idea => <div className="outcome-row" key={idea.id}><span className="outcome-check"><Check size={12} /></span><div><b>{idea.text}</b><small>{ideaStatus(idea) === "Done" ? "Marked complete" : "Progress check-in"}{idea.progressUpdatedAt ? ` · ${formatDate(idea.progressUpdatedAt)}` : ""}{idea.nextStep ? ` · ${idea.nextStep}` : ""}</small></div></div>)}{completedTasks.slice(0, 2).map(todo => <div className="outcome-row" key={todo.id}><span className="outcome-check"><Check size={12} /></span><div><b>{todo.title}</b><small>Action completed{todo.dueDate ? ` · Due ${formatDate(todo.dueDate)}` : ""}</small></div></div>)}</div>}
               </section>
             </div>
@@ -392,6 +388,8 @@ export default function WorkspacePage() {
             {filteredIdeas.length === 0 ? <div className="workspace-empty-state list-empty"><span><BookOpen size={19} /></span><h3>{ideas.length ? "No thoughts match this view." : "Your Idea Box has room to grow."}</h3><p>{ideas.length ? "Try another status or a shorter search." : "You can keep a thought here before deciding what it should become."}</p>{ideas.length === 0 && <Link href="/#top">Capture a thought <ArrowRight size={13} /></Link>}</div> : <div className="workspace-idea-list">{filteredIdeas.map(idea => <details className="workspace-idea-card" key={idea.id}><summary><span className={`idea-status-pill ${ideaStatus(idea).toLowerCase().replace(" ", "-")}`}><i />{ideaStatus(idea)}</span><span className="workspace-idea-main"><b>{idea.text}</b><small>Captured {formatDate(idea.createdAt)}{idea.updatedAt && ` · Updated ${formatDate(idea.updatedAt)}`}</small></span><span className="idea-related-counts">{linkedTodos(idea.id).length > 0 && <span><ListTodo size={12} />{linkedTodos(idea.id).length}</span>}{linkedEvents(idea.id).length > 0 && <span><CalendarDays size={12} />{linkedEvents(idea.id).length}</span>}</span><ChevronDown size={15} /></summary><div className="workspace-idea-expanded">{idea.nextStep && <div className="idea-reflection"><span>{ideaStatus(idea) === "Done" ? "REFLECTION / LAST NOTE" : "NEXT STEP"}</span><p>{idea.nextStep}</p></div>}<div className="idea-linked-grid">{linkedTodos(idea.id).map(todo => <div key={todo.id}><span><ListTodo size={12} />ACTION</span><b>{todo.title}</b><small>{todo.status}{todo.dueDate && ` · ${formatDate(todo.dueDate)}`}</small></div>)}{linkedEvents(idea.id).map(event => <div key={event.id}><span><CalendarDays size={12} />ON YOUR CALENDAR</span><b>{event.title}</b><small>{formatEventDate(event.scheduledDate)}{event.scheduledTime && ` · ${event.scheduledTime}`}</small></div>)}</div>{idea.progressUpdatedAt && <p className="idea-last-review">Last progress review · {formatDate(idea.progressUpdatedAt, { dateStyle: "medium", timeStyle: "short" })}</p>}</div></details>)}</div>}</section>}
 
           {tab === "Actions" && <section className="workspace-list-view"><div className="list-view-heading"><div><span className="panel-kicker">PLANS YOU CHOSE TO MAKE</span><h2>Actions and calendar</h2><p>Tasks stay connected to the ideas they serve. Nothing here needs to become a rigid project plan.</p></div><Link className="workspace-add-button" href="/"><ArrowUpRight size={14} /> Back to AIASK</Link></div><div className="actions-columns"><section className="workspace-panel"><div className="workspace-panel-heading"><div><span className="panel-kicker">TO-DO</span><h3>Open actions <small>{openTasks.length}</small></h3></div></div>{openTasks.length ? <div className="workspace-task-list">{openTasks.map(todo => <TaskRow key={todo.id} todo={todo} ideas={ideas} onToggle={toggleTodo} />)}</div> : <p className="workspace-panel-empty">No open actions right now.</p>}</section><section className="workspace-panel"><div className="workspace-panel-heading"><div><span className="panel-kicker">ON YOUR CALENDAR</span><h3>Plans with a time <small>{upcomingEvents.length}</small></h3></div></div>{upcomingEvents.length ? <div className="coming-list">{upcomingEvents.map(event => <div className="coming-event" key={event.id}><time>{formatEventDate(event.scheduledDate)}</time><div><b>{event.title}</b><small>{event.scheduledTime ?? "Any time"}{event.ideaId && ideas.find(idea => idea.id === event.ideaId) ? ` · ${ideas.find(idea => idea.id === event.ideaId)?.text}` : ""}</small></div></div>)}</div> : <p className="workspace-panel-empty">No upcoming calendar plans. Your time is yours to shape.</p>}</section></div><section className="workspace-panel completed-actions"><div className="workspace-panel-heading"><div><span className="panel-kicker">ALREADY DONE</span><h3>Completed actions <small>{completedTasks.length}</small></h3></div></div>{completedTasks.length ? <div className="workspace-task-list">{completedTasks.map(todo => <TaskRow key={todo.id} todo={todo} ideas={ideas} onToggle={toggleTodo} />)}</div> : <p className="workspace-panel-empty">Small steps count. Completed tasks will appear here.</p>}</section></section>}
+
+          {tab === "Outcomes" && records && <WeeklyReview records={records} />}
 
           {tab === "Outcomes" && <section className="workspace-list-view"><div className="list-view-heading"><div><span className="panel-kicker">NOTICE WHAT CHANGED</span><h2>Progress &amp; outcomes</h2><p>Keep a gentle record of what you finished, what you learned, and what might come next.</p></div><div className="outcomes-count"><Check size={15} />{outcomes.length + completedTasks.length} recorded</div></div>{outcomes.length === 0 && completedTasks.length === 0 ? <div className="workspace-empty-state list-empty"><span><TrendingUp size={19} /></span><h3>Progress begins with a first step.</h3><p>When you check in or complete an action, you’ll find that progress here. It’s fine if an idea remains open-ended.</p><button type="button" onClick={() => setTab("Ideas")}>Explore your ideas <ArrowRight size={13} /></button></div> : <div className="outcomes-timeline">{outcomes.map((idea, index) => <article className="outcome-timeline-item" key={idea.id}><span className="timeline-marker"><Check size={12} /></span><div className="timeline-content"><div className="timeline-meta"><span>{ideaStatus(idea) === "Done" ? "IDEA COMPLETED" : "PROGRESS REVIEW"}</span><time>{formatDate(idea.progressUpdatedAt ?? idea.updatedAt ?? idea.createdAt, { dateStyle: "medium", timeStyle: "short" })}</time></div><h3>{idea.text}</h3>{idea.nextStep && <p>{ideaStatus(idea) === "Done" ? "Reflection / note" : "Next step / note"}: {idea.nextStep}</p>}{linkedTodos(idea.id).length > 0 && <small>{linkedTodos(idea.id).filter(todo => todo.status === "Done").length} of {linkedTodos(idea.id).length} linked actions completed</small>}</div>{index < outcomes.length - 1 && <span className="timeline-connector" />}</article>)}{completedTasks.map(todo => <article className="outcome-timeline-item" key={todo.id}><span className="timeline-marker"><Check size={12} /></span><div className="timeline-content"><div className="timeline-meta"><span>ACTION COMPLETED</span><time>{todo.completedAt ? formatDate(todo.completedAt, { dateStyle: "medium", timeStyle: "short" }) : "Completion date not recorded"}</time></div><h3>{todo.title}</h3>{todo.ideaId && ideas.find(idea => idea.id === todo.ideaId) && <p>Connected to: {ideas.find(idea => idea.id === todo.ideaId)?.text}</p>}</div></article>)}</div>}</section>}
           {tab === "Conversations" && <section className="workspace-list-view conversation-history-view"><div className="list-view-heading"><div><span className="panel-kicker">AI PILOT HISTORY</span><h2>All Conversations</h2><p>Return to a question, compare perspectives from the AI Team, and continue thinking at your own pace.</p></div><Link className="workspace-add-button" href="/partners"><MessageSquare size={14} /> Start a conversation</Link></div>

@@ -1,7 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "../../../../lib/supabase/server";
 import { isSupabaseConfigured } from "../../../../lib/supabase/config";
-import { AIConfigurationError, AIProviderError, runPartnerFollowUpWithOpenAI, runPartnerWithOpenAI } from "../../../../lib/ai/openai";
+import { AIConfigurationError, AIProviderError, rephraseDailyQuestion, runPartnerFollowUpWithOpenAI, runPartnerWithOpenAI, summarizeWeeklyReview } from "../../../../lib/ai/openai";
+import { isAppLocale } from "../../../../i18n/config";
+import { isObject } from "../../../../lib/workspace/browser-records";
+import { isDailyQuestionKind } from "../../../../lib/workspace/daily-question";
+import { parseWeeklyCoachFacts } from "../../../../lib/workspace/weekly-coach";
 import { formatPartnerResponse, titleFromIdea } from "../../../../lib/ai/conversations";
 import {
   PARTNER_ROLE_ID,
@@ -156,6 +160,47 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     if (error instanceof RequestTooLargeError) return jsonError(413, "request_too_large", "The idea or conversation context is too long. Shorten it and try again.");
     return jsonError(400, "invalid_json", "The request body must be valid JSON.");
+  }
+
+  if (isObject(body) && body.mode === "daily_question") {
+    const { kind, locale } = body;
+    if (!isDailyQuestionKind(kind) || !isAppLocale(locale) ||
+      Object.keys(body).some(key => !["mode", "kind", "locale", "expectedUserId"].includes(key)) ||
+      typeof body.expectedUserId !== "string") {
+      return jsonError(400, "invalid_daily_question", "Choose a supported question type and language.");
+    }
+    if (body.expectedUserId !== userId) return jsonError(409, "account_changed", "Reopen My Workspace after changing accounts.");
+    const limit = consumeRateLimit(userId, requestLimitForAccount(userEmail));
+    if (!limit.allowed) {
+      return jsonError(429, "rate_limited", "The current AI request limit has been reached.", { "Retry-After": String(limit.retryAfter) });
+    }
+    try {
+      const { question, model, usage } = await rephraseDailyQuestion(kind, locale, request.signal);
+      console.info("ai.daily_question.completed", { kind, model, ...usage });
+      return NextResponse.json({ question }, { headers: { "Cache-Control": "no-store" } });
+    } catch (error) {
+      return jsonError(error instanceof AIConfigurationError ? 503 : 502, "daily_question_unavailable", "The original question is still available.");
+    }
+  }
+
+  if (isObject(body) && body.mode === "weekly_review") {
+    const facts = parseWeeklyCoachFacts(body.facts);
+    const { locale } = body;
+    if (!facts || !isAppLocale(locale) || typeof body.expectedUserId !== "string" ||
+      !Object.values(facts.counts).some(count => count > 0) ||
+      Object.keys(body).some(key => !["mode", "facts", "locale", "expectedUserId"].includes(key))) {
+      return jsonError(400, "invalid_weekly_review", "The review must contain supported dates, counts, and language.");
+    }
+    if (body.expectedUserId !== userId) return jsonError(409, "account_changed", "Reopen My Workspace after changing accounts.");
+    const limit = consumeRateLimit(userId, requestLimitForAccount(userEmail));
+    if (!limit.allowed) return jsonError(429, "rate_limited", "The current AI request limit has been reached.", { "Retry-After": String(limit.retryAfter) });
+    try {
+      const { summary, model, usage } = await summarizeWeeklyReview(facts, locale, request.signal);
+      console.info("ai.weekly_review.completed", { model, ...usage });
+      return NextResponse.json({ summary }, { headers: { "Cache-Control": "no-store" } });
+    } catch (error) {
+      return jsonError(error instanceof AIConfigurationError ? 503 : 502, "weekly_review_unavailable", "Your local weekly review is still available.");
+    }
   }
 
   const parsedRequest = parseAIASKRunRequest(body);

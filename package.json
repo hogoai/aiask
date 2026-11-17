@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test:workspace": "node --test tests/workspace-follow-up.test.cjs tests/workspace-weekly-review.test.cjs",
     "lint": "next lint"
   },
   "dependencies": {
