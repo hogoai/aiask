@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { ArrowRight, ArrowUpRight, BookOpen, CalendarDays, Check, ChevronDown, Circle, Compass, Lightbulb, ListTodo, MessageSquare, Search, Sparkles, Target, TrendingUp, X } from "lucide-react";
 import SiteNavigation from "../SiteNavigation";
@@ -75,6 +75,10 @@ export default function WorkspacePage() {
   const [selectedConversation, setSelectedConversation] = useState<AIConversation | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
+  const [followUpDraft, setFollowUpDraft] = useState("");
+  const [followUpLoading, setFollowUpLoading] = useState(false);
+  const [followUpError, setFollowUpError] = useState("");
+  const [followUpNotice, setFollowUpNotice] = useState("");
 
   useEffect(() => {
     try {
@@ -145,6 +149,9 @@ export default function WorkspacePage() {
     setSelectedConversation(null);
     setDetailLoading(true);
     setDetailError("");
+    setFollowUpDraft("");
+    setFollowUpError("");
+    setFollowUpNotice("");
     try {
       const response = await fetch("/api/ai/conversations/" + conversationId);
       const payload: unknown = await response.json();
@@ -163,6 +170,118 @@ export default function WorkspacePage() {
       setDetailError(openError instanceof Error ? openError.message : "This conversation could not be opened.");
     } finally {
       setDetailLoading(false);
+    }
+  }
+
+  async function submitConversationFollowUp(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const conversation = selectedConversation;
+    const question = followUpDraft.trim();
+    if (!conversation || !question || followUpLoading) return;
+    if (question.length > 1000) {
+      setFollowUpError("Keep follow-up questions under 1,000 characters.");
+      return;
+    }
+
+    const originalIdea = conversation.messages.find(message => message.kind === "idea")?.content ?? conversation.title;
+    const latestPerspective = conversation.messages
+      .filter(message => message.role === "assistant" && message.kind === "structured_response")
+      .at(-1)?.content.slice(0, 5000) ?? "";
+    const history = [
+      ...conversation.messages
+        .filter(message => message.role === "user" || message.role === "assistant")
+        .slice(-7)
+        .map(message => ({ role: message.role, content: message.content.slice(0, 1200) })),
+      { role: "user" as const, content: question.slice(0, 1200) },
+    ].slice(-8);
+
+    setFollowUpLoading(true);
+    setFollowUpError("");
+    setFollowUpNotice("");
+    try {
+      const response = await fetch("/api/ai/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "follow_up",
+          partnerRole: conversation.partnerRole,
+          conversationId: conversation.id,
+          userMessage: question,
+          originalIdea,
+          perspectiveContext: JSON.stringify({ title: conversation.title, savedPerspective: latestPerspective }),
+          history,
+        }),
+      });
+      const payload: unknown = await response.json();
+      const result = payload && typeof payload === "object" ? payload as {
+        error?: { message?: string };
+        answer?: string;
+        saved?: boolean;
+        userMessageId?: string;
+        model?: string;
+        usage?: { inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null };
+      } : {};
+      if (!response.ok) {
+        setFollowUpError(result.error?.message || "Your follow-up could not be sent.");
+        if (payload && typeof payload === "object" && "historySaved" in payload && payload.historySaved === true) {
+          setFollowUpDraft("");
+          setFollowUpNotice("Your question was saved. Continue in AI Team if you want to retry the response.");
+          await refreshConversationDetail(conversation.id);
+        }
+        return;
+      }
+      if (typeof result.answer !== "string") throw new Error("The AI reply was incomplete. Please try again.");
+      setFollowUpDraft("");
+      if (result.saved === false && result.userMessageId) {
+        const saveResponse = await fetch(`/api/ai/conversations/${conversation.id}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "retry_save",
+            userMessageId: result.userMessageId,
+            reply: { kind: "follow_up", answer: result.answer, model: result.model, usage: result.usage },
+          }),
+        });
+        const savePayload: unknown = await saveResponse.json();
+        if (!saveResponse.ok) {
+          const saveError = savePayload && typeof savePayload === "object" && "error" in savePayload
+            ? (savePayload as { error?: { message?: string } }).error?.message
+            : undefined;
+          throw new Error(saveError || "The AI replied, but the exchange could not be saved. Continue in AI Team to retry.");
+        }
+      } else if (result.saved !== true) {
+        throw new Error("The AI reply could not be confirmed as saved. Please reopen the conversation before continuing.");
+      }
+
+      setFollowUpNotice("Your follow-up is saved in this conversation.");
+      await refreshConversationDetail(conversation.id);
+      const params = new URLSearchParams();
+      if (conversationRoleFilter !== "all") params.set("partnerRole", conversationRoleFilter);
+      if (conversationSearch.trim()) params.set("q", conversationSearch.trim());
+      const listResponse = await fetch("/api/ai/conversations?" + params.toString());
+      if (listResponse.ok) {
+        const listPayload: unknown = await listResponse.json();
+        if (listPayload && typeof listPayload === "object" && "conversations" in listPayload && Array.isArray(listPayload.conversations)) {
+          setConversations(listPayload.conversations as ConversationListItem[]);
+        }
+      }
+    } catch (sendError) {
+      setFollowUpError(sendError instanceof Error ? sendError.message : "Your follow-up could not be sent.");
+    } finally {
+      setFollowUpLoading(false);
+    }
+  }
+
+  async function refreshConversationDetail(conversationId: string) {
+    try {
+      const response = await fetch("/api/ai/conversations/" + conversationId);
+      const payload: unknown = await response.json();
+      if (response.ok && payload && typeof payload === "object" && "conversation" in payload) {
+        const conversation = payload.conversation as AIConversation;
+        if (Array.isArray(conversation.messages)) setSelectedConversation(conversation);
+      }
+    } catch {
+      // The send result remains visible; reopening the conversation will fetch the latest transcript.
     }
   }
 
@@ -282,7 +401,7 @@ export default function WorkspacePage() {
             {conversationStatus === "unavailable" && <div className="workspace-empty-state list-empty"><span><BookOpen size={19} /></span><h3>Conversation storage needs setup.</h3><p>{conversationError} Run <code>supabase/migrations/0002_ai_pilot_conversations.sql</code> after migration 0001.</p></div>}
             {conversationStatus === "error" && <p className="workspace-error" role="alert">{conversationError}</p>}
             {conversationStatus === "ready" && conversations.length === 0 && <div className="workspace-empty-state list-empty"><span><MessageSquare size={19} /></span><h3>{conversationSearch.trim() || conversationRoleFilter !== "all" ? "No matching conversations." : "Your conversations will appear here."}</h3><p>{conversationSearch.trim() || conversationRoleFilter !== "all" ? "Try another search or AI Team role filter." : "Start with an idea, explore it with the AI Team, and return whenever you want to think further."}</p>{!conversationSearch.trim() && conversationRoleFilter === "all" && <Link href="/partners">Explore the AI Team <ArrowRight size={13} /></Link>}</div>}
-            {conversationStatus === "ready" && conversations.length > 0 && <div className="conversation-history-layout"><div className="conversation-record-list">{conversations.map(conversation => { const role = conversationRoles.find(item => item.id === conversation.partnerRole); return <button type="button" className={selectedConversation?.id === conversation.id ? "conversation-record selected" : "conversation-record"} key={conversation.id} onClick={() => void openConversation(conversation.id)}><span className="conversation-record-main"><b>{conversation.title}</b><small>{role?.label ?? conversation.partnerRole}{conversation.isFavorite ? " · Favorite" : ""}</small><small>{conversation.ideaId ? "Linked idea" : "AI Pilot conversation"}{conversation.projectId ? " · Linked project" : ""}</small></span><time>{formatDate(conversation.updatedAt, { dateStyle: "medium", timeStyle: "short" })}</time><ArrowRight size={14} /></button>; })}</div><section className="workspace-panel conversation-detail-panel" aria-label="Conversation details">{detailLoading ? <div className="workspace-loading"><span className="workspace-loading-dot" /> Opening conversation…</div> : detailError ? <p className="workspace-error" role="alert">{detailError}</p> : selectedConversation ? <><div className="conversation-detail-heading"><div><span className="panel-kicker">{conversationRoles.find(role => role.id === selectedConversation.partnerRole)?.label ?? selectedConversation.partnerRole}</span><h3>{selectedConversation.title}</h3><time>Updated {formatDate(selectedConversation.updatedAt, { dateStyle: "medium", timeStyle: "short" })}</time></div><div className="conversation-detail-actions"><Link className="workspace-add-button" href={`/partners?conversationId=${encodeURIComponent(selectedConversation.id)}&partner=${encodeURIComponent(selectedConversation.partnerRole)}`}>Continue in AI Team <ArrowUpRight size={13} /></Link><button type="button" className="conversation-close" aria-label="Close conversation details" onClick={() => setSelectedConversation(null)}><X size={15} /></button></div></div><div className="conversation-transcript">{selectedConversation.messages.map(message => <article className={message.role === "user" ? "conversation-transcript-message user" : "conversation-transcript-message assistant"} key={message.id}><div className="conversation-message-meta"><b>{message.role === "user" ? "You" : conversationRoles.find(role => role.id === selectedConversation.partnerRole)?.label ?? "AI Team"}</b><time>{formatDate(message.createdAt, { dateStyle: "medium", timeStyle: "short" })}</time></div>{message.kind === "idea" && <span className="conversation-kind">Starting idea</span>}{message.role === "assistant" ? <MarkdownContent content={message.content} /> : <p className="conversation-user-content">{message.content}</p>}{message.role === "user" && message.status === "failed" && <p className="conversation-message-status failed">AI response failed. Your question is saved; open AI Team to try again.</p>}{message.role === "user" && message.status === "save_failed" && <p className="conversation-message-status failed">The AI reply could not be saved. Retry saving from the open AI Pilot page.</p>}{message.role === "user" && message.status === "pending" && <p className="conversation-message-status">Waiting for the AI response. Reopen AI Team if the request was interrupted.</p>}</article>)}</div></> : <div className="workspace-empty-state conversation-detail-empty"><span><BookOpen size={19} /></span><h3>Choose a conversation.</h3><p>Open a record to read its full exchange.</p></div>}</section></div>}
+            {conversationStatus === "ready" && conversations.length > 0 && <div className="conversation-history-layout"><div className="conversation-record-list">{conversations.map(conversation => { const role = conversationRoles.find(item => item.id === conversation.partnerRole); return <button type="button" className={selectedConversation?.id === conversation.id ? "conversation-record selected" : "conversation-record"} key={conversation.id} onClick={() => void openConversation(conversation.id)}><span className="conversation-record-main"><b>{conversation.title}</b><small>{role?.label ?? conversation.partnerRole}{conversation.isFavorite ? " · Favorite" : ""}</small><small>{conversation.ideaId ? "Linked idea" : "AI Pilot conversation"}{conversation.projectId ? " · Linked project" : ""}</small></span><time>{formatDate(conversation.updatedAt, { dateStyle: "medium", timeStyle: "short" })}</time><ArrowRight size={14} /></button>; })}</div><section className="workspace-panel conversation-detail-panel" aria-label="Conversation details">{detailLoading ? <div className="workspace-loading"><span className="workspace-loading-dot" /> Opening conversation…</div> : detailError ? <p className="workspace-error" role="alert">{detailError}</p> : selectedConversation ? <><div className="conversation-detail-heading"><div><span className="panel-kicker">{conversationRoles.find(role => role.id === selectedConversation.partnerRole)?.label ?? selectedConversation.partnerRole}</span><h3>{selectedConversation.title}</h3><time>Updated {formatDate(selectedConversation.updatedAt, { dateStyle: "medium", timeStyle: "short" })}</time></div><div className="conversation-detail-actions"><Link className="workspace-add-button" href={`/partners?conversationId=${encodeURIComponent(selectedConversation.id)}&partner=${encodeURIComponent(selectedConversation.partnerRole)}`}>Continue in AI Team <ArrowUpRight size={13} /></Link><button type="button" className="conversation-close" aria-label="Close conversation details" onClick={() => setSelectedConversation(null)}><X size={15} /></button></div></div><div className="conversation-transcript">{selectedConversation.messages.map(message => <article className={message.role === "user" ? "conversation-transcript-message user" : "conversation-transcript-message assistant"} key={message.id}><div className="conversation-message-meta"><b>{message.role === "user" ? "You" : conversationRoles.find(role => role.id === selectedConversation.partnerRole)?.label ?? "AI Team"}</b><time>{formatDate(message.createdAt, { dateStyle: "medium", timeStyle: "short" })}</time></div>{message.kind === "idea" && <span className="conversation-kind">Starting idea</span>}{message.role === "assistant" ? <MarkdownContent content={message.content} /> : <p className="conversation-user-content">{message.content}</p>}{message.role === "user" && message.status === "failed" && <p className="conversation-message-status failed">AI response failed. Your question is saved; open AI Team to try again.</p>}{message.role === "user" && message.status === "save_failed" && <p className="conversation-message-status failed">The AI reply could not be saved. Retry saving from the open AI Pilot page.</p>}{message.role === "user" && message.status === "pending" && <p className="conversation-message-status">Waiting for the AI response. Reopen AI Team if the request was interrupted.</p>}</article>)}</div><form className="conversation-follow-up" onSubmit={submitConversationFollowUp}><label className="sr-only" htmlFor="workspace-conversation-follow-up">Continue this conversation</label><textarea id="workspace-conversation-follow-up" value={followUpDraft} onChange={event => { setFollowUpDraft(event.target.value); setFollowUpError(""); setFollowUpNotice(""); }} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} maxLength={1000} rows={2} placeholder="Ask a follow-up question…" disabled={followUpLoading} /><div className="conversation-follow-up-footer"><span>{followUpDraft.length}/1000 · Enter to send, Shift+Enter for a new line</span><button type="submit" disabled={!followUpDraft.trim() || followUpLoading}>{followUpLoading ? "Thinking…" : "Send follow-up"}<ArrowRight size={13} /></button></div>{followUpError && <p className="conversation-follow-up-error" role="alert">{followUpError}</p>}{followUpNotice && <p className="conversation-follow-up-notice" role="status">{followUpNotice}</p>}</form></> : <div className="workspace-empty-state conversation-detail-empty"><span><BookOpen size={19} /></span><h3>Choose a conversation.</h3><p>Open a record to read its full exchange.</p></div>}</section></div>}
           </section>}
         </>}
       </div>

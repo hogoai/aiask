@@ -444,15 +444,35 @@ function HomeContent() {
     try {
       await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()));
       const now = new Date().toISOString();
+      const nextStep = nextStepDraft.trim();
       const next = ideas.map(item => item.id === checkInIdea.id
-        ? { ...item, status: checkInStatus, nextStep: nextStepDraft.trim(), progressUpdatedAt: now, updatedAt: now }
+        ? { ...item, status: checkInStatus, nextStep, progressUpdatedAt: now, updatedAt: now }
         : item);
       if (!persistIdeas(next)) {
         setCheckInSaveError("Progress could not be saved. Your edits are still here; please try again after checking browser storage.");
         return;
       }
-      setCheckInSaved(true);
       setSelectedIdea(next.find(item => item.id === checkInIdea.id) ?? null);
+
+      const matchingTodo = plannerData.todos.some(todo => todo.ideaId === checkInIdea.id && todo.title.trim() === nextStep);
+      if (nextStep && !matchingTodo) {
+        const todo: PlannerTodo = {
+          id: crypto.randomUUID(),
+          ideaId: checkInIdea.id,
+          eventId: null,
+          title: nextStep,
+          dueDate: "",
+          status: "Open",
+          priority: "onTrack",
+          createdAt: now,
+        };
+        if (!persistPlanner({ ...plannerData, todos: [todo, ...plannerData.todos] })) {
+          setCheckInSaveError("Progress was saved. The next step couldn’t be added to To-do. Please check your browser storage and try saving again.");
+          return;
+        }
+      }
+
+      setCheckInSaved(true);
     } catch {
       setCheckInSaveError("Progress could not be saved. Your edits are still here; please try again.");
     } finally {
@@ -925,7 +945,7 @@ function HomeContent() {
           {checkInIdea.progressUpdatedAt && <p className="checkin-updated">Last progress update: {formatDate(checkInIdea.progressUpdatedAt)}</p>}
           {checkInSaveError && <p className="storage-error" role="alert">{checkInSaveError}</p>}
         </div>
-        <footer className="checkin-footer"><div className="proactive-modal-actions"><button type="button" className="button button-outline-light" onClick={() => { setProactiveOpen(false); setView("inbox"); setSelectedIdea(checkInIdea); }}>View in Idea Box <ArrowUpRight size={14}/></button><button type="button" className="button button-dark" onClick={() => void saveCheckIn()} disabled={checkInSaving || checkInSaved}>{checkInSaving ? "Saving…" : checkInSaved ? "Progress saved" : checkInSaveError ? "Try saving again" : "Save progress"} {!checkInSaving && <Check size={14}/>}</button></div>{checkInSaved && <p className="checkin-saved" role="status"><Check size={14}/> Progress and next step saved.</p>}</footer>
+        <footer className="checkin-footer"><div className="proactive-modal-actions"><button type="button" className="button button-outline-light" onClick={() => { setProactiveOpen(false); setView("inbox"); setSelectedIdea(checkInIdea); }}>View in Idea Box <ArrowUpRight size={14}/></button><button type="button" className="button button-dark" onClick={() => void saveCheckIn()} disabled={checkInSaving || checkInSaved}>{checkInSaving ? "Saving…" : checkInSaved ? "Progress saved" : checkInSaveError ? "Try saving again" : "Save progress"} {!checkInSaving && <Check size={14}/>}</button></div>{checkInSaved && <p className="checkin-saved" role="status"><Check size={14}/> {nextStepDraft.trim() ? "Progress saved. Your next step is in To-do." : "Progress saved."}</p>}</footer>
       </> : null}
     </section></div>}
     </>}
