@@ -245,7 +245,7 @@ export function parseAIASKInput(value: unknown): ValidationResult<AIASKInput> {
   let locale: string | undefined;
   if (value.locale !== undefined) {
     if (typeof value.locale !== "string" || value.locale.length > 35 || !LOCALE_PATTERN.test(value.locale)) {
-      return { success: false, error: "locale must be a valid language tag such as en or zh-CN." };
+      return { success: false, error: "locale must be a valid language tag such as en or en-US." };
     }
     try {
       const [canonicalLocale] = Intl.getCanonicalLocales(value.locale);

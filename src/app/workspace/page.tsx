@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
+import { defaultLocale } from "../../i18n/config";
 import { ArrowRight, ArrowUpRight, BookOpen, CalendarDays, Check, ChevronDown, Circle, Compass, Lightbulb, ListTodo, MessageSquare, Search, Sparkles, Target, TrendingUp, X } from "lucide-react";
 import SiteNavigation from "../SiteNavigation";
 import MarkdownContent from "../partners/MarkdownContent";
@@ -36,19 +37,19 @@ const conversationRoles: { id: PartnerRole; label: string }[] = [
 function formatDate(value: string, options: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" }) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Date unavailable";
-  return new Intl.DateTimeFormat(undefined, options).format(date);
+  return new Intl.DateTimeFormat(defaultLocale, options).format(date);
 }
 
 function formatEventDate(value: string) {
   const date = new Date(`${value}T00:00:00`);
   if (Number.isNaN(date.getTime())) return "Date to be confirmed";
-  return new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" }).format(date);
+  return new Intl.DateTimeFormat(defaultLocale, { weekday: "short", month: "short", day: "numeric" }).format(date);
 }
 
 function formatDateOnly(value: string) {
   const date = new Date(`${value}T12:00:00`);
   if (Number.isNaN(date.getTime())) return "Date unavailable";
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
+  return new Intl.DateTimeFormat(defaultLocale, { month: "short", day: "numeric" }).format(date);
 }
 
 function ideaStatus(idea: IdeaRecord): IdeaStatus { return idea.status ?? "Saved"; }
@@ -196,6 +197,7 @@ export default function WorkspacePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           mode: "follow_up",
+          locale: defaultLocale,
           partnerRole: conversation.partnerRole,
           conversationId: conversation.id,
           userMessage: question,

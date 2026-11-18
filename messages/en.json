@@ -1,10 +1,4 @@
 {
-  "languageSwitcher": {
-    "label": "Interface language",
-    "english": "Switch interface to English",
-    "chinese": "Switch interface to Simplified Chinese",
-    "saveFailed": "Your browser could not save the language preference. Please allow cookies and try again."
-  },
   "workspaceCoach": {},
   "weeklyReview": {
     "title": "Weekly Review",

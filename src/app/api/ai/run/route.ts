@@ -175,7 +175,7 @@ export async function POST(request: NextRequest) {
       return jsonError(429, "rate_limited", "The current AI request limit has been reached.", { "Retry-After": String(limit.retryAfter) });
     }
     try {
-      const { question, model, usage } = await rephraseDailyQuestion(kind, locale, request.signal);
+      const { question, model, usage } = await rephraseDailyQuestion(kind, request.signal);
       console.info("ai.daily_question.completed", { kind, model, ...usage });
       return NextResponse.json({ question }, { headers: { "Cache-Control": "no-store" } });
     } catch (error) {
@@ -195,7 +195,7 @@ export async function POST(request: NextRequest) {
     const limit = consumeRateLimit(userId, requestLimitForAccount(userEmail));
     if (!limit.allowed) return jsonError(429, "rate_limited", "The current AI request limit has been reached.", { "Retry-After": String(limit.retryAfter) });
     try {
-      const { summary, model, usage } = await summarizeWeeklyReview(facts, locale, request.signal);
+      const { summary, model, usage } = await summarizeWeeklyReview(facts, request.signal);
       console.info("ai.weekly_review.completed", { model, ...usage });
       return NextResponse.json({ summary }, { headers: { "Cache-Control": "no-store" } });
     } catch (error) {

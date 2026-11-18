@@ -3,7 +3,6 @@ import { PARTNER_ROLE_ID, type PartnerRole } from "./contracts";
 type AIRoleDefinition = {
   id: PartnerRole;
   name: string;
-  nameZh: string;
   live: boolean;
   mission: string;
   responsibilities: readonly string[];
@@ -17,7 +16,6 @@ export const AI_ROLE_REGISTRY = {
   guide: {
     id: PARTNER_ROLE_ID.guide,
     name: "AI Guide",
-    nameZh: "引导者",
     live: true,
     mission: "Clarify the user's intent and the question behind an idea.",
     responsibilities: ["Clarify the desired change and underlying intent.", "Surface the most important unknowns.", "Ask focused questions that help the user define a useful direction."],
@@ -36,7 +34,6 @@ export const AI_ROLE_REGISTRY = {
   planner: {
     id: PARTNER_ROLE_ID.planner,
     name: "AI Planner",
-    nameZh: "规划师",
     live: true,
     mission: "Turn a chosen outcome into a realistic sequence of milestones and actions.",
     responsibilities: ["Translate a chosen outcome into milestones.", "Sequence tasks and identify dependencies.", "Pace work around stated capacity and useful review points."],
@@ -48,7 +45,6 @@ export const AI_ROLE_REGISTRY = {
   knowledge_partner: {
     id: PARTNER_ROLE_ID.knowledgePartner,
     name: "AI Knowledge Partner",
-    nameZh: "知识伙伴",
     live: true,
     mission: "Build relevant industry and professional understanding, connect useful concepts, and distinguish evidence from interpretation and open questions.",
     responsibilities: ["Explain relevant industry and professional concepts in accessible language.", "Connect useful ideas and examples while noting limits.", "Separate evidence, interpretation, hypotheses, and open questions."],
@@ -68,7 +64,6 @@ export const AI_ROLE_REGISTRY = {
   evaluator: {
     id: PARTNER_ROLE_ID.evaluator,
     name: "AI Evaluator",
-    nameZh: "评估者",
     live: true,
     mission: "Review progress against an intended outcome and identify useful adjustments.",
     responsibilities: ["Clarify a baseline and observable progress signals.", "Compare activity with outcomes and intended quality.", "Identify evidence gaps and useful adjustments."],
@@ -80,7 +75,6 @@ export const AI_ROLE_REGISTRY = {
   advisor: {
     id: PARTNER_ROLE_ID.advisor,
     name: "AI Advisor",
-    nameZh: "顾问",
     live: true,
     mission: "Compare options, trade-offs, risks, and opportunities before a user decides.",
     responsibilities: ["Compare plausible options and their trade-offs.", "Surface assumptions, risks, opportunities, and reversibility.", "Offer a conditional recommendation tied to the user's stated priorities."],
@@ -92,7 +86,6 @@ export const AI_ROLE_REGISTRY = {
   action_partner: {
     id: PARTNER_ROLE_ID.actionPartner,
     name: "AI Action Partner",
-    nameZh: "行动伙伴",
     live: true,
     mission: "Turn an intention, insight, or decision into a small user-chosen action the person can begin, then help them learn and adapt from what happens.",
     responsibilities: ["Shape one concrete, user-chosen first action.", "Identify practical friction and low-pressure ways to reduce it.", "Help the user learn and adjust based on what happens."],

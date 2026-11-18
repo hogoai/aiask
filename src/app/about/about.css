@@ -52,7 +52,6 @@
 .about-role-top{display:flex;align-items:center;justify-content:space-between;color:#809278}
 .about-role-top>span{font-size:8px;letter-spacing:1px}
 .about-role-name{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px;margin-top:21px;color:#384d40;font:600 14px/1.4 var(--display);letter-spacing:-.2px;overflow-wrap:anywhere}
-.about-role-name span{color:#b17b60;font:italic 13px var(--serif)}
 .about-role-card p{max-width:285px;margin:8px 0 0;color:#7a847a;font-size:10px;line-height:1.65}
 .about-workflow{background:#fbfaf6}
 .workflow-layout{display:grid;grid-template-columns:.85fr 1.15fr;gap:24px 70px;align-items:center}

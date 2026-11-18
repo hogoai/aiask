@@ -4,7 +4,6 @@ import { useState } from "react";
 import Link from "next/link";
 import { CalendarDays, Check, Inbox, Menu, Plus, Sparkles, X } from "lucide-react";
 import AccountControl from "./AccountControl";
-import LanguageSwitcher from "./LanguageSwitcher";
 import "./site-navigation.css";
 
 type SiteNavigationProps = { active?: "about" | "partners" | "workspace" };
@@ -28,7 +27,6 @@ export default function SiteNavigation({ active }: SiteNavigationProps) {
       <Link className="nav-cta" href="/?view=todos" onClick={closeMenu}><Check size={16} />To-do</Link>
       <Link className="nav-cta" href="/?view=inbox" onClick={closeMenu}><Inbox size={16} />Idea Box</Link>
       <Link className="nav-cta share-cta" href="/?capture=1" onClick={closeMenu}>Capture an idea <Plus size={16} /></Link>
-      <LanguageSwitcher />
       <AccountControl />
     </nav>
   </header>;

@@ -16,12 +16,12 @@ const principles = [
 ];
 
 const roles = [
-  { icon: MessageCircleQuestion, name: "AI Guide", local: "引导者", copy: "Clarifies needs and goals through thoughtful questions." },
-  { icon: Workflow, name: "AI Planner", local: "规划师", copy: "Shapes realistic plans, priorities, tasks, and schedules." },
-  { icon: BrainCircuit, name: "AI Knowledge Specialist", local: "知识专员", copy: "Explains relevant fields and concepts, connects ideas, and marks where evidence needs checking." },
-  { icon: Check, name: "AI Evaluator", local: "评估者", copy: "Reviews progress, evaluates outcomes, identifies gaps, and suggests corrections." },
-  { icon: Compass, name: "AI Advisor", local: "顾问", copy: "Compares options, explores opportunities and risks, and offers independent recommendations." },
-  { icon: Target, name: "AI Action Coach", local: "行动教练", copy: "Turns intentions into small, user-chosen actions and helps reduce friction when starting." },
+  { icon: MessageCircleQuestion, name: "AI Guide", copy: "Clarifies needs and goals through thoughtful questions." },
+  { icon: Workflow, name: "AI Planner", copy: "Shapes realistic plans, priorities, tasks, and schedules." },
+  { icon: BrainCircuit, name: "AI Knowledge Specialist", copy: "Explains relevant fields and concepts, connects ideas, and marks where evidence needs checking." },
+  { icon: Check, name: "AI Evaluator", copy: "Reviews progress, evaluates outcomes, identifies gaps, and suggests corrections." },
+  { icon: Compass, name: "AI Advisor", copy: "Compares options, explores opportunities and risks, and offers independent recommendations." },
+  { icon: Target, name: "AI Action Coach", copy: "Turns intentions into small, user-chosen actions and helps reduce friction when starting." },
 ];
 
 const flow = ["Capture a thought", "Clarify what matters", "Explore possibilities", "Plan together", "Take action", "Review and improve"];
@@ -65,7 +65,7 @@ export default function AboutPage() {
     <section className="about-section about-roles" id="roles">
       <div className="about-wrap">
         <div className="about-section-heading"><p className="about-kicker">ONE COORDINATED EXPERIENCE</p><h2>Six ways to support<br /><em>your thinking and actions.</em></h2><p className="section-intro">These are complementary roles in one AI experience, sharing relevant context rather than operating as six disconnected products.</p></div>
-        <div className="about-role-grid">{roles.map(({ icon: Icon, name, local, copy }, index) => <article className="about-role-card" key={name}><div className="about-role-top"><span>0{index + 1}</span><Icon size={19} aria-hidden="true" /></div><div className="about-role-name">{name}<span>{local}</span></div><p>{copy}</p></article>)}</div>
+        <div className="about-role-grid">{roles.map(({ icon: Icon, name, copy }, index) => <article className="about-role-card" key={name}><div className="about-role-top"><span>0{index + 1}</span><Icon size={19} aria-hidden="true" /></div><div className="about-role-name">{name}</div><p>{copy}</p></article>)}</div>
       </div>
     </section>
 

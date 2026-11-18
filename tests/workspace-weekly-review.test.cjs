@@ -157,7 +157,7 @@ test("Coach endpoint verifies the account and sends only counts to the provider 
   });
   Object.assign(process.env, values);
   const { summaryFacts: facts } = report({ todos: [todo("Private title", { dueDate: "2026-11-17" })] });
-  const summary = { reflection: "可以先看看仍标为待办的事项。", nextStep: "选一项确认下一步。" };
+  const summary = { reflection: "Some tasks are still marked open.", nextStep: "Pick one task and decide what to do next." };
   let calls = 0;
   let reply = summary;
   global.fetch = async (url, options) => {
@@ -165,16 +165,17 @@ test("Coach endpoint verifies the account and sends only counts to the provider 
     const body = JSON.parse(options.body);
     assert.equal(body.store, false);
     assert.deepEqual(JSON.parse(body.input[0].content), facts);
-    assert.ok(body.instructions.includes("Simplified Chinese"));
+    assert.ok(body.instructions.includes("Write in English."));
     calls++;
     return Response.json({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(reply) }] }] });
   };
   const run = overrides => POST(new Request("http://localhost/api/ai/run", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode: "weekly_review", locale: "zh-CN", facts, expectedUserId: "weekly-test-user", ...overrides }),
+    body: JSON.stringify({ mode: "weekly_review", locale: "en", facts, expectedUserId: "weekly-test-user", ...overrides }),
   }));
   assert.equal((await run({ expectedUserId: "other" })).status, 409);
   assert.equal((await run({ title: "Private title" })).status, 400);
+  assert.equal((await run({ locale: "zh-CN" })).status, 400);
   assert.equal(calls, 0);
   const success = await run({});
   assert.equal(success.status, 200);

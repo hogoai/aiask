@@ -1,7 +1,6 @@
 import { AI_ROLE_REGISTRY } from "./roles";
 import { getOutputText } from "./response-text";
 import { PARTNER_ROLE_ID, validatePartnerResponse, type AIASKInput, type ModelUsage, type PartnerFollowUpMessage } from "./contracts";
-import type { AppLocale } from "../../i18n/config";
 import { dailyQuestionRole, isShortQuestion, type DailyQuestionKind } from "../workspace/daily-question";
 import { parseWeeklyCoachSummary, type WeeklyCoachFacts } from "../workspace/weekly-coach";
 
@@ -94,7 +93,7 @@ const dailyFacts: Record<DailyQuestionKind, string> = {
   staleIdea: "The latest recorded update for an idea in progress was at least two weeks ago. Actual progress is unknown.",
 };
 
-export async function rephraseDailyQuestion(kind: DailyQuestionKind, locale: AppLocale, signal: AbortSignal) {
+export async function rephraseDailyQuestion(kind: DailyQuestionKind, signal: AbortSignal) {
   const { apiKey, model, baseUrl } = getModelConfiguration();
   const partner = AI_ROLE_REGISTRY[dailyQuestionRole[kind]];
   try {
@@ -106,7 +105,7 @@ export async function rephraseDailyQuestion(kind: DailyQuestionKind, locale: App
         model, store: false, reasoning: { effort: "none" }, max_output_tokens: 180,
         instructions: [
           `You are AIASK's ${partner.name}. ${partner.mission} ${partner.tone}`,
-          `Write one short, natural question in ${locale === "zh-CN" ? "Simplified Chinese" : "English"}.`,
+          "Write one short, natural question in English.",
           "Ask a single thing that the user can decide. Use the supplied fact as the only context. The interface shows the title and evidence separately.",
           "Refer to the record generically; do not add names, dates, assumed progress, statements, advice, or promises. End with one question mark. Return only the requested JSON.",
         ].join(" "),
@@ -129,7 +128,7 @@ export async function rephraseDailyQuestion(kind: DailyQuestionKind, locale: App
   }
 }
 
-export async function summarizeWeeklyReview(facts: WeeklyCoachFacts, locale: AppLocale, signal: AbortSignal) {
+export async function summarizeWeeklyReview(facts: WeeklyCoachFacts, signal: AbortSignal) {
   const { apiKey, model, baseUrl } = getModelConfiguration();
   const partner = AI_ROLE_REGISTRY[PARTNER_ROLE_ID.evaluator];
   try {
@@ -140,7 +139,7 @@ export async function summarizeWeeklyReview(facts: WeeklyCoachFacts, locale: App
         model, store: false, reasoning: { effort: "none" }, max_output_tokens: 320,
         instructions: [
           `You are the AIASK Workspace Coach, using the ${partner.name} perspective. ${partner.mission}`,
-          `Write in ${locale === "zh-CN" ? "Simplified Chinese" : "English"}.`,
+          "Write in English.",
           "Return a brief reflection and one practical, optional next step, each at most two sentences.",
           "The input is aggregate counts from current browser records: completed has a recorded completion date in the selected week; undatedCompletions are not attributable to a week. OpenDue is the current open status of tasks with a due date on or before the selected week's end; openUndated has no due date. Neither is a historical snapshot. Scheduled counts plans, not attendance. IdeaProgress counts the latest stored check-ins in the selected week. NextFocus counts items for the following week; nextUrgent is its explicitly urgent subset.",
           "Reflect only those facts. Do not restate exact dates or counts; the interface already shows them. Missing records or zero counts do not prove that something did not happen. Mention the limits if partial is true. Do not invent activity, event outcomes, names, reasons, or priorities. Never claim to update any record or perform any action.",
