@@ -2,9 +2,10 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUpRight, Bell, Brain, BrainCircuit, CalendarCheck, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, CircleCheck, Clock3, Compass, Inbox, Lightbulb, Menu, MessageCircle, MessageCircleQuestion, MoreHorizontal, Pencil, Plus, Send, Sparkles, Target, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ArrowUpRight, Bell, CalendarDays, Check, Clock3, Compass, Inbox, Lightbulb, Menu, MoreHorizontal, Pencil, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
 import { getTaskPriority, PriorityControl, type TaskPriority } from "./PriorityControl";
 import AccountControl from "./AccountControl";
+import LandingPage from "./LandingPage";
 import { defaultLocale } from "../i18n/config";
 import "./site-navigation.css";
 import { isSupabaseConfigured } from "../lib/supabase/config";
@@ -60,14 +61,6 @@ function countEventPriorities(events: PlannerEvent[], todos: PlannerTodo[]) {
   }, { urgent: 0, attention: 0, onTrack: 0 });
 }
 
-const roles = [
-  { icon: MessageCircleQuestion, no: "01", name: "AI Guide", title: "Clarifies what matters", copy: "Asks thoughtful questions to understand your needs, clarify your goals, and help you find the right direction." },
-  { icon: CalendarCheck, no: "02", name: "AI Planner", title: "Turns goals into plans", copy: "Breaks your goals into realistic tasks, priorities, milestones, and calendar plans." },
-  { icon: BrainCircuit, no: "03", name: "AI Knowledge Specialist", title: "Connects ideas and knowledge", copy: "Connects your notes, knowledge, and related information to reveal new perspectives and useful insights." },
-  { icon: ChartNoAxesCombined, no: "04", name: "AI Evaluator", title: "Evaluates progress and results", copy: "Reviews your progress, checks results against your goals, and identifies gaps, risks, and areas to improve." },
-  { icon: Compass, no: "05", name: "AI Advisor", title: "Helps you make better decisions", copy: "Compares options, evaluates opportunities and risks, and recommends practical next steps." },
-  { icon: Target, no: "06", name: "AI Action Coach", title: "Helps you start what matters", copy: "Turns intentions into small, user-chosen actions, helps lower starting friction, and adapts when you learn something new." },
-];
 
 export default function Home() {
   return <Suspense fallback={<main className="wrap auth-gate-loading" role="status">Opening AIASK…</main>}><HomeContent /></Suspense>;
@@ -85,7 +78,6 @@ function HomeContent() {
   const [idea, setIdea] = useState("");
   const [saved, setSaved] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [workspaceMode, setWorkspaceMode] = useState<"day" | "tasks" | "ideas">("day");
   const [ideas, setIdeas] = useState<IdeaRecord[]>([]);
   const [plannerData, setPlannerData] = useState<PlannerData>({ events: [], todos: [] });
   const [calendarCursor, setCalendarCursor] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
@@ -610,12 +602,6 @@ function HomeContent() {
     setSelectedCalendarDate(toDateInputValue(nextMonth));
   }
 
-  function openCalendarDate(date: string) {
-    const selected = dateFromInput(date);
-    setCalendarCursor(new Date(selected.getFullYear(), selected.getMonth(), 1));
-    setSelectedCalendarDate(date);
-    setView("calendar");
-  }
 
   function togglePlannerTodo(todoId: string) {
     const currentTodo = plannerData.todos.find(todo => todo.id === todoId);
@@ -664,7 +650,7 @@ function HomeContent() {
       <a className="brand" href="#top" aria-label="AIASK home" onClick={event => { if (view !== "home") { event.preventDefault(); setView("home"); } }}><span className="brand-mark"><Sparkles size={17} /></span>aiask<span className="brand-dot">.</span></a>
       <button className="mobile-menu" aria-label="Toggle menu" onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X /> : <Menu />}</button>
       <nav className={menuOpen ? "nav-links open" : "nav-links"}>
-        <a href="/about" onClick={() => setMenuOpen(false)}>About Us</a><a href="/partners" onClick={() => setMenuOpen(false)}>AI Team</a><a href="/workspace" onClick={() => setMenuOpen(false)}>My Workspace</a>
+        <a href="/partners" onClick={() => setMenuOpen(false)}>AI Team</a><a href="/workspace" onClick={() => setMenuOpen(false)}>My Workspace</a>
         <button className={view === "calendar" ? "nav-cta active" : "nav-cta"} onClick={() => { setView("calendar"); setMenuOpen(false); }}><CalendarDays size={15}/> Calendar</button>
         <button className={view === "todos" ? "nav-cta active" : "nav-cta"} onClick={() => { setView("todos"); setMenuOpen(false); }}><Check size={15}/> To-do{openTodos.length > 0 && <span className="nav-count">{openTodos.length}</span>}</button>
         <button className={view === "inbox" ? "nav-cta active" : "nav-cta"} onClick={() => { setView(view === "inbox" ? "home" : "inbox"); setSelectedIdea(null); setMenuOpen(false); }}><Inbox size={15}/> Idea Box{ideas.length > 0 && <span className="nav-count">{ideas.length}</span>}</button>
@@ -763,83 +749,23 @@ function HomeContent() {
       </div>
     </section> : <>
 
-    <section className="hero wrap" id="top">
-      <div className="hero-copy">
-        <div className="eyebrow"><span className="pulse" /> A more proactive kind of AI</div>
-        <h1>Your next good<br />move starts <em>here.</em></h1>
-        <p className="hero-intro">Life doesn’t wait for the perfect prompt. AIASK helps you catch ideas, make a plan, and keep moving toward what matters.</p>
-        <form className="hero-composer" onSubmit={captureFromHome}>
-          <div className="composer-top"><span className="composer-avatar"><Sparkles size={14}/></span><span>AIASK <i>is listening</i></span><span className="composer-live"><i/> READY</span></div>
-          <label className="sr-only" htmlFor="home-idea">Share an idea with AIASK</label>
-          <textarea id="home-idea" value={homeIdea} onChange={event => { setHomeIdea(event.target.value); setHomeIdeaSaved(false); }} placeholder="What’s on your mind? Share an idea, a note, or something to remember…" rows={2}/>
-          <div className="composer-bottom"><span>✳ &nbsp;Start anywhere. No perfect prompt needed.</span><button className="button button-dark" type="submit" disabled={!homeIdea.trim() || !storageReady}>Capture <ArrowUpRight size={15}/></button></div>
+    <LandingPage
+      onOpenView={next => { setView(next); setMenuOpen(false); }}
+      capture={<>
+        <form className="lp-capture-form" onSubmit={captureFromHome}>
+          <label className="lp-capture-label" htmlFor="home-idea">What’s your idea?</label>
+          <textarea id="home-idea" value={homeIdea} onChange={event => { setHomeIdea(event.target.value); setHomeIdeaSaved(false); }}
+            placeholder="A problem you’d love to solve. Something you want to create. A possibility worth exploring…" rows={3} />
+          <div><small>Keep it in your Idea Box. Explore when you’re ready.</small><button type="submit" disabled={!homeIdea.trim() || !storageReady}>Save my idea <ArrowUpRight size={14} aria-hidden="true" /></button></div>
         </form>
-        {storageError && !captureOpen && <p className="storage-error hero-storage-error" role="alert">{storageError}</p>}
-        {homeIdeaSaved && <div className="home-capture-confirm" role="status"><Check size={15}/> Saved to your Idea Box <button onClick={() => { setView("inbox"); setSelectedIdea(null); }}>Open Idea Box <ArrowRight size={13}/></button></div>}
-        <div className="hero-actions"><a className="text-link" href="#how">Meet your AI team <ArrowDown size={15} /></a></div>
-        <div className="hero-note"><span className="avatar-stack"><i>A</i><i>✳</i><i>Y</i></span><span>Built around your life, not another chatbot window.</span></div>
-      </div>
-      <div className="hero-art" aria-label="AIASK proactive planning dashboard preview">
-        <div className="orbit orbit-one"></div><div className="orbit orbit-two"></div><div className="orbit orbit-three"></div>
-        <div className="spark-node node-a">✳</div><div className="spark-node node-b"><CalendarDays size={17}/></div><div className="spark-node node-c"><Lightbulb size={17}/></div>
-        <div className="dashboard-card">
-          <div className="dash-top"><span className="dash-brand"><span className="mini-mark">✳</span> your day, in focus</span><span className="dash-date">MON · 21</span></div>
-          <div className="dash-greeting">A little momentum<br />goes a long way.</div>
-          <div className="proactive"><span className="proactive-icon"><Sparkles size={15}/></span><div><b>A thought for today</b><p>You mentioned wanting more time to write. There’s a quiet hour open at 10.</p><span className="suggestion-link">Make it a writing hour <ArrowRight size={12}/></span></div></div>
-          <div className="task-head"><span>YOUR PLAN</span><span>2 OF 4 DONE</span></div>
-          <div className="task-row done"><span className="task-check"><Check size={11}/></span><span>Review project notes</span><small>9:00</small></div>
-          <div className="task-row"><span className="task-check"></span><span>Focus time · draft outline</span><small>10:00</small></div>
-          <div className="task-row"><span className="task-check"></span><span>Walk + clear your head</span><small>12:30</small></div>
-          <div className="dash-footer"><span className="footer-spark">✳</span> You’ve got this. I’ll check in later.</div>
-        </div>
-        <div className="floating-note note-memory"><Brain size={15}/><span>Remembering your goals</span></div>
-        <div className="floating-note note-progress"><span className="progress-ring">↗</span><span>Small steps add up</span></div>
-      </div>
-      <a className="scroll-cue" href="#how"><span>SCROLL TO EXPLORE</span><ChevronDown size={14}/></a>
-    </section>
-
-    <section className="ticker"><div className="ticker-inner"><span>NOTICE</span><i>✳</i><span>PLAN</span><i>✳</i><span>REMEMBER</span><i>✳</i><span>NUDGE</span><i>✳</i><span>REFLECT</span><i>✳</i><span>REPEAT</span><i>✳</i><span>NOTICE</span><i>✳</i><span>PLAN</span></div></section>
-
-    <section className="section how-section wrap" id="how">
-      <div className="section-kicker">AN AI TEAM THAT PAYS ATTENTION</div>
-      <div className="section-heading"><h2>Less starting over.<br /><em>More moving forward.</em></h2><p>AIASK brings your ideas, plans, knowledge, and progress into one thoughtful loop. It can reach out with a timely nudge—and still leaves you in charge.</p></div>
-      <div className="steps-grid">
-        <article className="step-card step-capture"><div className="step-top"><span>01 / CAPTURE</span><span className="step-icon"><MessageCircle size={17}/></span></div><h3>Get it out<br />of your head.</h3><p>Save a passing thought, voice-note an idea, or ask AIASK to remember something for later.</p><div className="capture-demo"><span className="tiny-spark">✳</span><span>“I should call Maya about the workshop…”</span><ArrowRight size={14}/></div></article>
-        <article className="step-card step-plan"><div className="step-top"><span>02 / PLAN</span><span className="step-icon"><CalendarDays size={17}/></span></div><h3>Make a plan<br />that fits real life.</h3><p>Turn good intentions into clear next steps, with your time and energy in mind.</p><div className="plan-demo"><div><span className="plan-dot"></span>Draft workshop outline <small>Tomorrow · 10:00</small></div><Check size={14}/></div></article>
-        <article className="step-card step-learn"><div className="step-top"><span>03 / FOLLOW THROUGH</span><span className="step-icon"><ArrowRight size={17}/></span></div><h3>Keep going.<br />Adjust as you go.</h3><p>Get a helpful nudge, see how things went, and learn what actually works for you.</p><div className="learn-demo"><span className="learn-face">☺</span><span>Two focus blocks this week. Nice rhythm.</span></div></article>
-      </div>
-    </section>
-
-    <section className="roles-section" id="roles"><div className="wrap roles-wrap"><div className="roles-intro"><div className="section-kicker">SIX WAYS AIASK SHOWS UP</div><h2>One team.<br /><em>A whole lot of range.</em></h2><p>One AI core, with six specialized roles working together behind one calm, personal experience.</p><button className="button button-outline" onClick={() => openCheckIn()}>Check in on your ideas <ArrowUpRight size={15}/></button></div><div className="roles-grid">{roles.map(({icon: Icon,no,name,title,copy})=><article className="role-card" key={no}><div className="role-top"><span>{no}</span><Icon size={19}/></div><div className="role-name">{name}</div><h3>{title}</h3><p>{copy}</p></article>)}</div></div></section>
-
-    <section className="workspace-section wrap" id="workspace"><div className="workspace-top"><div><div className="section-kicker">YOUR LIFE, WITH A LITTLE MORE CLARITY</div><h2>One home for the<br /><em>things you’re building.</em></h2></div><p>Ideas connect to plans. Plans connect to your calendar. And your knowledge stays close when it’s time to make the next move.</p></div>
-      <div className="workspace-board"><aside className="board-sidebar"><div className="sidebar-brand"><span className="mini-mark">✳</span> aiask</div>
-        <button className={workspaceMode === "day" ? "side-link workspace-side-link active" : "side-link workspace-side-link"} onClick={() => setWorkspaceMode("day")}><CalendarDays size={15}/> My day</button>
-        <button className={workspaceMode === "tasks" ? "side-link workspace-side-link active" : "side-link workspace-side-link"} onClick={() => setWorkspaceMode("tasks")}><Check size={15}/> Tasks <span className="side-count">{openTodos.length}</span></button>
-        <button className={workspaceMode === "ideas" ? "side-link workspace-side-link active" : "side-link workspace-side-link"} onClick={() => setWorkspaceMode("ideas")}><Lightbulb size={15}/> Ideas <span className="side-count">{ideas.length}</span></button>
-        <button className="side-link workspace-side-link" onClick={() => { setSelectedCalendarDate(toDateInputValue(new Date())); setCalendarCursor(new Date(new Date().getFullYear(), new Date().getMonth(), 1)); setView("calendar"); }}><Brain size={15}/> Calendar <span className="side-count">{plannerData.events.length}</span></button>
-        <div className="sidebar-bottom"><span className="user-dot">Y</span><span>You, in the loop</span><ChevronDown size={13}/></div></aside>
-        <div className="board-main"><div className="board-header"><div><span className="board-date">{new Intl.DateTimeFormat(defaultLocale, { weekday: "long", month: "long", day: "numeric" }).format(new Date()).toUpperCase()}</span><h3>{workspaceMode === "ideas" ? "Your ideas" : workspaceMode === "tasks" ? "Your to-dos" : "Good morning, Alex"} <span>✳</span></h3><p>{workspaceMode === "ideas" ? "Saved thoughts, ready for their next step." : workspaceMode === "tasks" ? "Every open and completed task, in one place." : "Your calendar and next steps, connected."}</p></div><div className="workspace-actions"><button className="board-add" onClick={() => workspaceMode === "ideas" ? setCaptureOpen(true) : setView(workspaceMode === "tasks" ? "todos" : "calendar")}><Plus size={15}/> {workspaceMode === "ideas" ? "Add a thought" : workspaceMode === "tasks" ? "Manage tasks" : "Open calendar"}</button></div></div>
-          <div className="board-columns"><div className="board-column">
-            {workspaceMode === "ideas" ? <><div className="column-label">SAVED IDEAS <span>{ideas.length}</span></div>{ideas.length === 0 ? <div className="workspace-empty"><p>Your Idea Box is ready for its first thought.</p><button onClick={() => setCaptureOpen(true)}>Capture an idea <ArrowRight size={13}/></button></div> : ideas.map(item => <button className="workspace-idea-row" key={item.id} onClick={() => { setSelectedIdea(item); setView("inbox"); }}><Lightbulb size={14}/><span><b>{item.text}</b><small>{item.status ?? "Saved"} · {formatDate(item.createdAt)}</small></span><ArrowUpRight size={14}/></button>)}</> : <>
-              <div className="column-label">{workspaceMode === "tasks" ? "ALL TO-DOS" : "UP NEXT"} <span>{workspaceMode === "tasks" ? plannerData.todos.length : openTodos.length + plannerData.events.length}</span></div>
-              {(workspaceMode === "tasks" ? [...openTodos, ...doneTodos] : [...openTodos].sort((a, b) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999"))).length === 0 && plannerData.events.length === 0 ? <div className="workspace-empty"><p>No tasks or calendar plans here yet.</p><button onClick={() => setView("todos")}>Add your first to-do <ArrowRight size={13}/></button></div> : <>
-                {(workspaceMode === "tasks" ? [...openTodos, ...doneTodos] : [...openTodos].sort((a, b) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999"))).map(todo => { const linkedIdea = ideas.find(item => item.id === todo.ideaId); return <div className={todo.status === "Done" ? "workspace-item done" : "workspace-item"} key={todo.id}><button className="workspace-check" aria-label={todo.status === "Done" ? "Reopen task" : "Complete task"} onClick={() => togglePlannerTodo(todo.id)}>{todo.status === "Done" && <Check size={12}/>}</button><button className="workspace-item-copy" onClick={() => setView("todos")}><b>{todo.title}</b><small>{todo.dueDate ? `Due ${formatScheduleDate(todo.dueDate)}` : "No due date"}{linkedIdea ? ` · ${linkedIdea.text}` : ""}</small></button><button className="workspace-open" onClick={() => setView("todos")}>Open</button></div>; })}
-                {workspaceMode === "day" && plannerData.events.length > 0 && <><div className="column-label later-label">CALENDAR <span>{plannerData.events.length}</span></div>{[...plannerData.events].sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate) || (a.scheduledTime ?? "").localeCompare(b.scheduledTime ?? "")).map(event => <button className="workspace-event-row" key={event.id} onClick={() => openCalendarDate(event.scheduledDate)}><CalendarDays size={14}/><span><b>{event.title}</b><small>{formatScheduleDate(event.scheduledDate)}{event.scheduledTime ? ` · ${event.scheduledTime}` : " · All day"}</small></span><ArrowUpRight size={13}/></button>)}</>}
-              </>}
-            </>}
-          </div><div className="board-side"><div className="coach-card"><div className="coach-icon"><Sparkles size={16}/></div><span className="coach-label">YOUR WORKSPACE</span><p>{openTodos.length} open {openTodos.length === 1 ? "task" : "tasks"} · {plannerData.events.length} calendar {plannerData.events.length === 1 ? "item" : "items"} · {ideas.length} saved {ideas.length === 1 ? "idea" : "ideas"}</p><button onClick={() => openCheckIn()}>Check in on progress <ArrowRight size={13}/></button></div><div className="week-card"><span>TO-DO PROGRESS</span><div className="week-stat">{doneTodos.length}<span> / {plannerData.todos.length}</span></div><p>tasks completed</p><div className="workspace-progress"><i style={{ width: `${plannerData.todos.length ? doneTodos.length / plannerData.todos.length * 100 : 0}%` }}/></div></div><button className="workspace-calendar-link" onClick={() => setView("calendar")}><CalendarDays size={14}/> Browse full calendar <ArrowRight size={13}/></button></div></div>
-        </div>
-      </div>
-    </section>
-
-    <section className="quote-section"><div className="wrap quote-inner"><span className="quote-mark">“</span><blockquote>The best AI doesn’t just answer you.<br /><em>It helps you become who you meant to be.</em></blockquote><div className="quote-foot"><span>AIASK · YOUR PERSONAL AI TEAM</span><span>ALWAYS IN YOUR CORNER <span className="quote-star">✳</span></span></div></div></section>
-
-    <section className="final-cta wrap"><span className="cta-orb orb-left">✳</span><span className="cta-orb orb-right">✳</span><div className="eyebrow"><span className="pulse"/> YOUR NEXT CHAPTER, WITH YOUR AI TEAM</div><h2>What’s on your mind?</h2><p>A big ambition, a small reminder, a “someday” idea.<br />Start anywhere. AIASK will help you find the next step.</p><button className="button button-dark" onClick={() => setCaptureOpen(true)}>Drop in a thought <ArrowUpRight size={16}/></button><span className="cta-note">No perfect prompt needed. Just you, as you are.</span></section>
-
-    <footer className="footer wrap"><a className="brand" href="#top"><span className="brand-mark"><Sparkles size={17}/></span>aiask<span className="brand-dot">.</span></a><span>More intention. Less mental clutter.</span><div><a href="#how">How it works</a><a href="#roles">AI team</a><a href="#top">Back to top ↑</a></div><small>© 2026 AIASK</small></footer>
+        {storageError && !captureOpen && <p className="storage-error" role="alert">{storageError}</p>}
+        {homeIdeaSaved && <div className="lp-capture-confirm" role="status"><Check size={14} />Saved to your Idea Box <button type="button" onClick={() => { setView("inbox"); setSelectedIdea(null); }}>Open Idea Box <ArrowRight size={13} /></button></div>}
+      </>}
+    />
 
     </>}
+
+    {view !== "home" && <footer className="page-footer wrap"><a href="/about">About Us</a></footer>}
 
     {view === "inbox" && selectedIdea && (() => {
       const display = ideaTitleAndSummary(selectedIdea.text);

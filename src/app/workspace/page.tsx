@@ -405,6 +405,7 @@ export default function WorkspacePage() {
           </section>}
         </>}
       </div>
+      <footer className="page-footer workspace-page-footer"><Link href="/about">About Us</Link></footer>
     </div>
   </main>;
 }

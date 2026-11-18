@@ -149,12 +149,14 @@ export default function PartnersExperience({ initialConversationId, initialPartn
   }, []);
 
   useEffect(() => {
-    if (!storageReady || !initialConversationId || !initialPartnerId || resumeHandled.current) return;
+    if (!storageReady || !initialPartnerId || resumeHandled.current) return;
     resumeHandled.current = true;
     const partnerId = initialPartnerId as PartnerId;
     setActivePartnerId(partnerId);
-    setConversationIdsByPartner({ [partnerId]: initialConversationId });
-    void loadPartnerConversation(partnerId, initialConversationId);
+    if (initialConversationId) {
+      setConversationIdsByPartner({ [partnerId]: initialConversationId });
+      void loadPartnerConversation(partnerId, initialConversationId);
+    }
     window.requestAnimationFrame(() => document.getElementById("partner-detail")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }, [storageReady, initialConversationId, initialPartnerId]);
 
@@ -568,6 +570,6 @@ export default function PartnersExperience({ initialConversationId, initialPartn
       <div className={draftReady ? "shared-draft ready" : "shared-draft"} id="shared-draft"><div className="shared-draft-head"><div><span className="detail-label">POTENTIAL NEXT STEP</span><h3>{draftReady ? `A draft from ${getPartner(draftPartnerId)?.name ?? "your selected perspective"}` : "Choose an insight to prepare"}</h3></div>{draftReady && <button type="button" className="draft-clear" onClick={() => { setDraft(""); setDraftPartnerId(null); setDraftReady(false); setDraftError(""); }}>Clear draft</button>}</div><label className="sr-only" htmlFor="shared-draft-input">Potential next step draft</label><textarea id="shared-draft-input" value={draft} onChange={event => { setDraft(event.target.value); setDraftReady(true); setDraftError(""); }} placeholder="Choose an AI Team perspective above to prepare a next step for review." rows={3}/><div className="shared-draft-footer"><p><Check size={13} /> Draft only until you continue. This opens To-do with the step prefilled; you confirm before saving it.</p><button type="button" className="shared-draft-continue" onClick={continueWithDraft} disabled={!draft.trim()}>Continue to execution <ArrowRight size={13}/></button></div>{draftError && <p className="shared-draft-error" role="alert">{draftError}</p>}</div>
     </div></section>
 
-    <footer className="partners-footer"><div className="partners-wrap"><span>aiask<span>.</span></span><p>One team. A whole lot of range.</p><Link href="/workspace">Open My Workspace <ArrowUpRight size={13} /></Link></div></footer>
+    <footer className="partners-footer"><div className="partners-wrap"><span>aiask<span>.</span></span><p>One team. A whole lot of range.</p><Link href="/about">About Us</Link><Link href="/workspace">Open My Workspace <ArrowUpRight size={13} /></Link></div></footer>
   </main>;
 }

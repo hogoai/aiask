@@ -20,7 +20,6 @@ export default function SiteNavigation({ active }: SiteNavigationProps) {
       {menuOpen ? <X size={21} /> : <Menu size={21} />}
     </button>
     <nav className={menuOpen ? "nav-links open" : "nav-links"} aria-label="Main navigation">
-      <Link href="/about" aria-current={active === "about" ? "page" : undefined} onClick={closeMenu}>About Us</Link>
       <Link href="/partners" aria-current={active === "partners" ? "page" : undefined} onClick={closeMenu}>AI Team</Link>
       <Link href="/workspace" aria-current={active === "workspace" ? "page" : undefined} onClick={closeMenu}>My Workspace</Link>
       <Link className="nav-cta" href="/?view=calendar" onClick={closeMenu}><CalendarDays size={16} />Calendar</Link>

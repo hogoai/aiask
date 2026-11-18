@@ -4,6 +4,7 @@ import { defaultLocale } from "../i18n/config";
 import "./globals.css";
 import "./login/login.css";
 import "./account-state.css";
+import "./theme.css";
 
 export const metadata: Metadata = {
   title: "AIASK — Make your next move",
