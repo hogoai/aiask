@@ -1,28 +1,28 @@
 .weekly-review{margin:0 0 24px;padding:clamp(14px,2vw,20px);min-width:0}
-.weekly-review h2{margin:0;font:650 20px var(--display);color:#34483a}
-.weekly-review h3{margin:0;font:650 14px var(--display);color:#34483a}
+.weekly-review h2{margin:0;font:650 20px var(--display);color:var(--ink)}
+.weekly-review h3{margin:0;font:650 14px var(--display);color:var(--ink)}
 .weekly-review-header,.weekly-review-title,.weekly-review-periods,.weekly-review-range,.weekly-review-coach>div:first-child{display:flex;align-items:center;gap:8px}
 .weekly-review-header{justify-content:space-between;flex-wrap:wrap}
 .weekly-review-title{gap:10px}
-.weekly-review-icon{display:grid;place-items:center;flex:none;width:39px;height:39px;border-radius:9px;background:#edf2e9;color:#47614e}
-.weekly-review-button{padding:6px 10px;border:1px solid #dbe4d9;border-radius:6px;background:#fff;color:#395546;font:600 12px/1.45 var(--sans);cursor:pointer}
-.weekly-review-button:hover{background:#edf3eb}
-.weekly-review-button[aria-pressed="true"]{border-color:#577464;background:#edf4ee;color:#2e5140}
+.weekly-review-icon{display:grid;place-items:center;flex:none;width:39px;height:39px;border-radius:9px;background:var(--brand-soft);color:var(--muted)}
+.weekly-review-button{padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);font:600 12px/1.45 var(--sans);cursor:pointer}
+.weekly-review-button:hover{background:var(--brand-soft)}
+.weekly-review-button[aria-pressed="true"]{border-color:var(--brand);background:var(--brand-soft);color:var(--ink)}
 .weekly-review-button:disabled{cursor:default;opacity:.65}
-.weekly-review .weekly-review-note,.weekly-review .weekly-review-warning,.weekly-review .weekly-review-empty{margin:6px 0;color:#556960;font-size:12px;line-height:1.55}
+.weekly-review .weekly-review-note,.weekly-review .weekly-review-warning,.weekly-review .weekly-review-empty{margin:6px 0;color:var(--muted);font-size:12px;line-height:1.55}
 .weekly-review .weekly-review-warning{color:#684d32}
-.weekly-review .weekly-review-range{flex-wrap:wrap;margin:12px 0;font-size:12px;color:#3c5548}
-.weekly-review-range span{font-size:11px;color:#586d63}
+.weekly-review .weekly-review-range{flex-wrap:wrap;margin:12px 0;font-size:12px;color:var(--ink)}
+.weekly-review-range span{font-size:11px;color:var(--muted)}
 .weekly-review-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-.weekly-review-group{min-width:0;padding:12px;border:1px solid #e2e9df;border-radius:8px;background:#f9fbf7}
+.weekly-review-group{min-width:0;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
 .weekly-review-group-heading{display:flex;align-items:center;justify-content:space-between;gap:7px}
-.weekly-review-group-heading span{color:#3d5b47;background:#eaf2e9;border-radius:5px;padding:2px 6px;font-size:12px;font-weight:650}
+.weekly-review-group-heading span{color:var(--ink);background:var(--brand-soft);border-radius:5px;padding:2px 6px;font-size:12px;font-weight:650}
 .weekly-review-items{list-style:none;margin:4px 0 8px;padding:0}
-.weekly-review-items li{padding:6px 0;border-top:1px solid #e4eae0;overflow-wrap:anywhere}
-.weekly-review-record{color:#344d40;font-size:13px;font-weight:650}
+.weekly-review-items li{padding:6px 0;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.weekly-review-record{color:var(--ink);font-size:13px;font-weight:650}
 .weekly-review-record:hover{text-decoration:underline}
-.weekly-review-items small,.weekly-review-items li p{display:block;margin:2px 0 0;color:#52695e;font-size:11px;line-height:1.5}
-.weekly-review-coach{margin-top:12px;padding:11px 12px;border:1px solid #e2e9df;border-radius:8px;background:#f6f9f4;color:#415f50}
+.weekly-review-items small,.weekly-review-items li p{display:block;margin:2px 0 0;color:var(--muted);font-size:11px;line-height:1.5}
+.weekly-review-coach{margin-top:12px;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink)}
 .weekly-review-summary p{margin:7px 0 0;font-size:13px;line-height:1.55;overflow-wrap:anywhere}
-.weekly-review :is(button,a):focus-visible{outline:2px solid #4a765a;outline-offset:2px}
+.weekly-review :is(button,a):focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 @media(max-width:590px){.weekly-review-grid{grid-template-columns:1fr}}

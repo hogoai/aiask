@@ -203,6 +203,11 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Match the existing daily/weekly guard for user-initiated Coach handoffs before any history/model writes.
+  if (isObject(body) && body.expectedUserId !== undefined) {
+    if (typeof body.expectedUserId !== "string") return jsonError(400, "invalid_request", "Expected account ID must be a string.");
+    if (body.expectedUserId !== userId) return jsonError(409, "account_changed", "Reopen My Workspace after changing accounts.");
+  }
   const parsedRequest = parseAIASKRunRequest(body);
   if (!parsedRequest.success) return jsonError(400, "invalid_request", parsedRequest.error);
 
@@ -256,7 +261,7 @@ export async function POST(request: NextRequest) {
       if (updateError) throw updateError;
       userMessageId = message.id;
     } else {
-      if (createdConversation && followUp) {
+      if (createdConversation && followUp && !followUp.plannerChat) {
         const { error: ideaError } = await supabase.from("ai_conversation_messages").insert({
           conversation_id: conversationId,
           user_id: userId,
@@ -318,12 +323,19 @@ export async function POST(request: NextRequest) {
       const storedHistory: PartnerFollowUpMessage[] = (storedMessages ?? [])
         .reverse()
         .map(message => ({ role: message.role as "user" | "assistant", content: message.content }));
-      const completion = await runPartnerFollowUpWithOpenAI(followUp.input, followUp.originalIdea, followUp.perspectiveContext, storedHistory);
+      const completion = await runPartnerFollowUpWithOpenAI(
+        followUp.input,
+        followUp.originalIdea,
+        followUp.perspectiveContext,
+        storedHistory,
+        followUp.plannerChat === true,
+      );
       const outputCandidate = {
         partnerRole: requestRole,
         role: requestRole,
         response: { summary: completion.answer.slice(0, 5000), content: completion.answer },
         answer: completion.answer,
+        ...(followUp.plannerChat && completion.plannerChange ? { plannerChange: completion.plannerChange } : {}),
         usage: completion.usage,
         model: completion.model,
         conversationId,
@@ -338,7 +350,11 @@ export async function POST(request: NextRequest) {
         userMessageId,
         "follow_up",
         completion.answer,
-        { model: completion.model, usage: completion.usage },
+        {
+          model: completion.model,
+          usage: completion.usage,
+          ...(followUp.plannerChat && completion.plannerChange ? { plannerChange: completion.plannerChange } : {}),
+        },
       );
       console.info(`ai.request.completed ${JSON.stringify({
         userId,

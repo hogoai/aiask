@@ -1,12 +1,14 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useLocale } from "next-intl";
 import { ChevronDown, Send, Sparkles } from "lucide-react";
 import MarkdownContent from "../partners/MarkdownContent";
 import { formatPartnerResponse } from "../../lib/ai/conversations";
 import { PARTNER_ROLE_ID, type AIASKContext, type PartnerResponse } from "../../lib/ai/contracts";
+import type { AIConversation } from "../../lib/ai/conversations";
+import { workflowCoachContext, workflowRoleNames, type WorkflowCoachRequest } from "../../lib/proactive/coach";
 
 type CoachIdea = {
   id: string;
@@ -23,7 +25,11 @@ type CoachPlanner = { todos: CoachTodo[]; events: CoachEvent[] };
 type CoachMessage = { id: string; role: "user" | "assistant"; content: string; status?: "pending" | "completed" | "failed"; result?: PartnerResponse };
 type CoachRetry = { question: string; localMessageId: string; body: Record<string, unknown>; retryMessageId?: string; conversationId?: string };
 type CoachError = { message: string; needsSignIn: boolean; retryable: boolean };
-type WorkspaceCoachProps = { ideas: CoachIdea[]; planner: CoachPlanner; onShowHistory: () => void };
+type WorkspaceCoachProps = {
+  ideas: CoachIdea[]; planner: CoachPlanner; onShowHistory: () => void;
+  workflowRequest?: WorkflowCoachRequest; expectedUserId?: string;
+  onClearWorkflow?: () => void; onConversationLinked?: (caseId: string, conversationId: string) => void;
+};
 
 const coachPrompts = [
   "Which idea should I focus on now?",
@@ -31,6 +37,7 @@ const coachPrompts = [
   "How can I make my next step easier?",
   "What progress pattern do you notice?",
 ];
+const workflowPrompts = ["What might be blocking this task?", "Help me list the questions to clarify this blocker.", "What is one useful next step?"];
 
 function localDateKey(date: Date) {
   return date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0") + "-" + String(date.getDate()).padStart(2, "0");
@@ -81,18 +88,49 @@ function makeWorkspaceCoachContext(ideas: CoachIdea[], planner: CoachPlanner): A
   };
 }
 
-export default function WorkspaceCoach({ ideas, planner, onShowHistory }: WorkspaceCoachProps) {
+export default function WorkspaceCoach({ ideas, planner, onShowHistory, workflowRequest, expectedUserId, onClearWorkflow, onConversationLinked }: WorkspaceCoachProps) {
   const locale = useLocale();
   const [messages, setMessages] = useState<CoachMessage[]>([]);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(workflowRequest?.draft ?? "");
   const [contextEnabled, setContextEnabled] = useState(true);
   const [contextDetailsOpen, setContextDetailsOpen] = useState(false);
-  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(workflowRequest?.handoff.conversationId ?? null);
+  const [historyLoading, setHistoryLoading] = useState(Boolean(workflowRequest?.handoff.conversationId));
+  const [historyFailed, setHistoryFailed] = useState(false);
+  const lifetime = useRef<AbortController | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<CoachError | null>(null);
   const [retry, setRetry] = useState<CoachRetry | null>(null);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "failed">("idle");
-  const snapshot = useMemo(() => makeWorkspaceCoachContext(ideas, planner), [ideas, planner]);
+  const role = workflowRequest?.handoff.partnerRole ?? PARTNER_ROLE_ID.actionPartner;
+  const snapshot = useMemo(() => workflowRequest ? workflowCoachContext(workflowRequest.handoff) : makeWorkspaceCoachContext(ideas, planner), [ideas, planner, workflowRequest]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    lifetime.current = controller;
+    const existingId = workflowRequest?.handoff.conversationId;
+    if (existingId && workflowRequest?.ownerId === expectedUserId) {
+      void (async () => {
+        try {
+          const response = await fetch(`/api/ai/conversations/${encodeURIComponent(existingId)}`, { signal: controller.signal });
+          const payload: { conversation?: AIConversation } = await response.json();
+          if (controller.signal.aborted) return;
+          if (!response.ok || !payload.conversation || !Array.isArray(payload.conversation.messages)) throw new Error("History unavailable");
+          if (payload.conversation.partnerRole !== role) {
+            setConversationId(null); // A different assigned Partner gets its own discussion; old history stays intact.
+          } else {
+            const history = payload.conversation.messages.filter(message => (message.role === "user" || message.role === "assistant") &&
+              typeof message.content === "string" && message.status !== "pending" && message.status !== "failed");
+            const selected = history.length > 30 ? [history[0], ...history.slice(-29)] : history;
+            setMessages(selected.map(message => ({ id: message.id, role: message.role, content: message.content, status: "completed" })));
+          }
+        } catch {
+          if (!controller.signal.aborted) { setHistoryFailed(true); setError({ message: "The linked discussion could not be loaded. You can explicitly start a new discussion.", needsSignIn: false, retryable: false }); }
+        } finally { if (!controller.signal.aborted) setHistoryLoading(false); }
+      })();
+    } else setHistoryLoading(false);
+    return () => { controller.abort(); lifetime.current = null; };
+  }, [workflowRequest, expectedUserId, role]);
   const counts = {
     ideas: snapshot.relevantNotes?.length ?? 0,
     actions: snapshot.relevantTasks?.length ?? 0,
@@ -102,6 +140,8 @@ export default function WorkspaceCoach({ ideas, planner, onShowHistory }: Worksp
   const snapshotTotal = counts.ideas + counts.actions + counts.calendar + counts.outcomes;
 
   async function sendRequest(question: string, localMessageId: string, retryRequest?: CoachRetry) {
+    const signal = lifetime.current?.signal;
+    if (!signal || signal.aborted || historyLoading || historyFailed || (workflowRequest && workflowRequest.ownerId !== expectedUserId)) return;
     const isFollowUp = messages.some(message => message.role === "assistant");
     const sharedContext = contextEnabled && snapshotTotal > 0 ? snapshot : undefined;
     let body: Record<string, unknown>;
@@ -119,7 +159,7 @@ export default function WorkspaceCoach({ ideas, planner, onShowHistory }: Worksp
       body = {
         mode: "follow_up",
         locale,
-        partnerRole: PARTNER_ROLE_ID.actionPartner,
+        partnerRole: role,
         userMessage: question,
         originalIdea: firstQuestion,
         perspectiveContext: firstResponse?.result ? formatPartnerResponse(firstResponse.result) : (firstResponse?.content ?? ""),
@@ -129,13 +169,15 @@ export default function WorkspaceCoach({ ideas, planner, onShowHistory }: Worksp
       };
     } else {
       body = {
-        partnerRole: PARTNER_ROLE_ID.actionPartner,
+        partnerRole: role,
         userMessage: question,
         responseMode: "normal",
         locale,
         ...(sharedContext ? { context: sharedContext } : {}),
+        ...(conversationId ? { conversationId } : {}),
       };
     }
+    if (expectedUserId) body = { ...body, expectedUserId };
 
     setLoading(true);
     setError(null);
@@ -144,10 +186,12 @@ export default function WorkspaceCoach({ ideas, planner, onShowHistory }: Worksp
     try {
       const response = await fetch("/api/ai/run", {
         method: "POST",
+        signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       const payload: unknown = await response.json();
+      if (signal.aborted) return;
       const data = payload && typeof payload === "object" ? payload as {
         answer?: string;
         conversationId?: string;
@@ -189,21 +233,23 @@ export default function WorkspaceCoach({ ideas, planner, onShowHistory }: Worksp
         { id: "coach-ai-" + Date.now(), role: "assistant", content: answer, ...(result ? { result } : {}) },
       ]);
       setSaveStatus(data.saved === false ? "failed" : "saved");
+      if (workflowRequest && data.conversationId) onConversationLinked?.(workflowRequest.handoff.caseId, data.conversationId);
     } catch (requestError) {
+      if (signal.aborted) return;
       const message = requestError instanceof Error ? requestError.message : "The Coach could not complete this request.";
       setMessages(current => current.map(item => item.id === localMessageId ? { ...item, status: "failed" } : item));
       setError({ message, needsSignIn: false, retryable: true });
       setSaveStatus("idle");
       setRetry({ question, localMessageId, body });
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
   }
 
   function submitQuestion(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const question = draft.trim();
-    if (!question || loading) return;
+    if (!question || loading || historyLoading || historyFailed) return;
     const localMessageId = "coach-user-" + Date.now() + "-" + Math.random().toString(16).slice(2);
     setMessages(current => [...current, { id: localMessageId, role: "user", content: question, status: "pending" }]);
     setDraft("");
@@ -223,6 +269,7 @@ export default function WorkspaceCoach({ ideas, planner, onShowHistory }: Worksp
     setError(null);
     setRetry(null);
     setSaveStatus("idle");
+    setHistoryFailed(false);
   }
 
   return <section className="workspace-coach" aria-labelledby="workspace-coach-title">
@@ -237,20 +284,25 @@ export default function WorkspaceCoach({ ideas, planner, onShowHistory }: Worksp
       </div>
     </div>
     <p className="workspace-coach-boundary">Advice only. Nothing will be added to Actions or Calendar.</p>
+    {workflowRequest && <div className="proactive-coach-context"><strong>{workflowRoleNames[role]} · Connected workflow</strong><p>{workflowRequest.handoff.context.source.snapshot.title}</p>
+      <p>Only this workflow&apos;s reviewed task, confirmed facts and clearly labelled proposals are included. Review the draft and send when ready.</p>
+      <button type="button" onClick={onClearWorkflow} disabled={loading}>Return to Workspace context</button></div>}
     <div className="workspace-coach-context-controls">
-      <label><input type="checkbox" checked={contextEnabled} onChange={event => setContextEnabled(event.target.checked)} /><span>Use my Workspace snapshot</span></label>
+      <label><input type="checkbox" checked={contextEnabled} onChange={event => setContextEnabled(event.target.checked)} /><span>{workflowRequest ? "Use this workflow snapshot" : "Use my Workspace snapshot"}</span></label>
       <button type="button" aria-expanded={contextDetailsOpen} onClick={() => setContextDetailsOpen(open => !open)}>What's shared? <ChevronDown size={13} /></button>
       {contextEnabled && snapshotTotal > 0 && <span className="workspace-coach-context-count">{counts.ideas} ideas | {counts.actions} actions | {counts.calendar} plans | {counts.outcomes} progress records</span>}
       {contextEnabled && snapshotTotal === 0 && <span className="workspace-coach-context-count">No Workspace records to include yet</span>}
     </div>
-    {contextDetailsOpen && <p className="workspace-coach-privacy">When enabled, up to 5 recent ideas, 8 actions, 5 plans in the next 14 days, and 3 progress records are sent with each question. Your question and Coach replies are saved in AI Team Conversations; your Workspace records remain in this browser.</p>}
+    {contextDetailsOpen && <p className="workspace-coach-privacy">{workflowRequest
+      ? "Only this reviewed task, up to 5 confirmed facts, 3 labelled unconfirmed proposals and 3 original replies are shared. Your question and Coach replies are saved in AI Team Conversations. No broader Workspace snapshot is added."
+      : "When enabled, up to 5 recent ideas, 8 actions, 5 plans in the next 14 days, and 3 progress records are sent with each question. Your question and Coach replies are saved in AI Team Conversations; your Workspace records remain in this browser."}</p>}
     <div className="workspace-coach-prompts" role="group" aria-label="Suggested questions">
-      {coachPrompts.map(prompt => <button type="button" key={prompt} onClick={() => setDraft(prompt)} disabled={loading}>{prompt}</button>)}
+      {(workflowRequest ? workflowPrompts : coachPrompts).map(prompt => <button type="button" key={prompt} onClick={() => setDraft(prompt)} disabled={loading || historyLoading}>{prompt}</button>)}
     </div>
     <div className="workspace-coach-thread" role="log" aria-label="Workspace AI Coach conversation" aria-live="polite">
       {messages.length === 0 && !loading && <p className="workspace-coach-empty">Your Workspace follows your lead. Ask for a reflection, or choose a question above.</p>}
       {messages.map(message => <article className={"workspace-coach-message " + message.role} key={message.id}>
-        <div className="workspace-coach-message-meta"><b>{message.role === "user" ? "You" : "AI Action Coach"}</b>{message.role === "user" && message.status === "pending" && <span>Sending...</span>}{message.role === "user" && message.status === "failed" && <span>Not completed</span>}</div>
+        <div className="workspace-coach-message-meta"><b>{message.role === "user" ? "You" : workflowRequest ? workflowRoleNames[role] : "AI Action Coach"}</b>{message.role === "user" && message.status === "pending" && <span>Sending...</span>}{message.role === "user" && message.status === "failed" && <span>Not completed</span>}</div>
         {message.role === "user" ? <p className="workspace-coach-user-text">{message.content}</p> : message.result ? <div className="workspace-coach-result">
           <section><h3>What I notice</h3><p>{message.result.perspective}</p></section>
           {message.result.opportunities.length > 0 && <section><h3>Ways to improve</h3><ul>{message.result.opportunities.map((item, index) => <li key={index}>{item}</li>)}</ul></section>}
@@ -260,14 +312,15 @@ export default function WorkspaceCoach({ ideas, planner, onShowHistory }: Worksp
           {message.result.uncertainty.length > 0 && <details><summary>What I cannot infer yet</summary><ul>{message.result.uncertainty.map((item, index) => <li key={index}>{item}</li>)}</ul></details>}
         </div> : <MarkdownContent content={message.content} />}
       </article>)}
-      {loading && <p className="workspace-coach-loading" role="status"><span /> Reading your shared Workspace snapshot...</p>}
+      {(loading || historyLoading) && <p className="workspace-coach-loading" role="status"><span />{historyLoading ? "Loading the linked discussion..." : "Reading your shared context..."}</p>}
     </div>
     <form className="workspace-coach-form" onSubmit={submitQuestion}>
       <label className="sr-only" htmlFor="workspace-coach-input">Ask the Workspace AI Coach</label>
-      <textarea id="workspace-coach-input" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} maxLength={1200} rows={2} placeholder="Ask about your Workspace..." disabled={loading} />
-      <div className="workspace-coach-form-footer"><span>{draft.length}/1200 | Enter to send, Shift+Enter for a new line</span><button type="submit" disabled={!draft.trim() || loading}>{loading ? "Thinking..." : "Ask Coach"}<Send size={14} /></button></div>
+      <textarea id="workspace-coach-input" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} maxLength={1200} rows={2} placeholder="Ask about your Workspace..." disabled={loading || historyLoading || historyFailed} />
+      <div className="workspace-coach-form-footer"><span>{draft.length}/1200 | Enter to send, Shift+Enter for a new line</span><button type="submit" disabled={!draft.trim() || loading || historyLoading || historyFailed}>{loading ? "Thinking..." : "Ask Coach"}<Send size={14} /></button></div>
     </form>
     {error && <p className="workspace-coach-error" role="alert">{error.message}{error.needsSignIn && <> <Link href="/login?next=%2Fworkspace">Sign in</Link></>}{error.retryable && retry && <button type="button" onClick={retryRequest} disabled={loading}>Try again</button>}</p>}
+    {historyFailed && <button type="button" onClick={startNewConversation}>Start a new discussion</button>}
     {saveStatus !== "idle" && <p className="workspace-coach-save-status" role="status">{saveStatus === "saving" ? "Saving this conversation..." : saveStatus === "saved" ? "Saved in AI Team Conversations" : "The reply is ready, but the conversation may not have been saved."}</p>}
     <div className="workspace-coach-footer"><Sparkles size={12} /><span>Suggestions reflect only the records shared with this question.</span><Link href="/about">How AIASK thinks</Link></div>
   </section>;

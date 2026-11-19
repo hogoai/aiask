@@ -21,12 +21,12 @@
 
 .shared-site-nav .nav-links .share-cta {
   background: var(--deep);
-  color: #fff;
+  color: var(--surface);
   border-color: var(--deep);
 }
 
 .shared-site-nav .nav-links .share-cta:hover {
-  background: #1c352d;
+  background: var(--brand);
 }
 
 @media (max-width: 640px) {

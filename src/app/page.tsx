@@ -1,22 +1,29 @@
 "use client";
 
+import TaskCreationBridge from "./workspace/TaskCreationBridge";
+import { TASK_CREATED_EVENT } from "../lib/proactive/creation";
+import PlannerAIChat from "./PlannerAIChat";
+import { applyPlannerChange, buildCalendarPlannerContext, buildTodoPlannerContext } from "../lib/planner/ai-planner";
+
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUpRight, Bell, Brain, BrainCircuit, CalendarCheck, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, CircleCheck, Clock3, Compass, Inbox, Lightbulb, Menu, MessageCircle, MessageCircleQuestion, MoreHorizontal, Pencil, Plus, Send, Sparkles, Target, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ArrowUpRight, Bell, CalendarDays, Check, Clock3, Compass, Inbox, Lightbulb, Menu, MoreHorizontal, Pencil, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
 import { getTaskPriority, PriorityControl, type TaskPriority } from "./PriorityControl";
 import AccountControl from "./AccountControl";
+import LandingPage from "./LandingPage";
+import { useWorkspaceAccount } from "./workspace/useWorkspaceAccount";
 import { defaultLocale } from "../i18n/config";
 import "./site-navigation.css";
 import { isSupabaseConfigured } from "../lib/supabase/config";
 import { createClient } from "../lib/supabase/client";
 import { getHomeView, homeViewUrl, type HomeView } from "../lib/home-navigation";
-import { PARTNER_ROLE_ID, validateAIASKOutput, type PartnerResponse, type PartnerRole } from "../lib/ai/contracts";
+import { PARTNER_ROLE_ID, validateAIASKOutput, type PartnerResponse, type PartnerRole, type PlannerChange } from "../lib/ai/contracts";
 
 type IdeaStatus = "Saved" | "In progress" | "Done";
 type IdeaInboxFilter = "All" | "Inbox" | "In progress" | "Done" | "Archived";
 type IdeaRecord = { id: string; text: string; createdAt: string; updatedAt?: string; status?: IdeaStatus; nextStep?: string; progressUpdatedAt?: string };
-type PlannerEvent = { id: string; ideaId: string | null; todoId: string | null; title: string; scheduledDate: string; scheduledTime: string | null; description: string; priority?: TaskPriority; createdAt: string; origin?: "calendar" | "task-deadline" };
-type PlannerTodo = { id: string; ideaId: string | null; eventId: string | null; title: string; dueDate: string; status: "Open" | "Done"; priority?: TaskPriority; createdAt?: string; completedAt?: string; updatedAt?: string; remindAt?: string; remindedAt?: string; reminderPending?: boolean };
+type PlannerEvent = { ownerId?: string; id: string; ideaId: string | null; todoId: string | null; title: string; scheduledDate: string; scheduledTime: string | null; description: string; priority?: TaskPriority; createdAt: string; origin?: "calendar" | "task-deadline" };
+type PlannerTodo = { ownerId?: string; originConversationId?: string; id: string; ideaId: string | null; eventId: string | null; title: string; dueDate: string; status: "Open" | "Done"; priority?: TaskPriority; createdAt?: string; completedAt?: string; updatedAt?: string; remindAt?: string; remindedAt?: string; reminderPending?: boolean };
 type PlannerData = { events: PlannerEvent[]; todos: PlannerTodo[] };
 const AI_PARTNER_OPTIONS: { id: PartnerRole; name: string }[] = [
   { id: PARTNER_ROLE_ID.guide, name: "AI Guide" },
@@ -60,20 +67,14 @@ function countEventPriorities(events: PlannerEvent[], todos: PlannerTodo[]) {
   }, { urgent: 0, attention: 0, onTrack: 0 });
 }
 
-const roles = [
-  { icon: MessageCircleQuestion, no: "01", name: "AI Guide", title: "Clarifies what matters", copy: "Asks thoughtful questions to understand your needs, clarify your goals, and help you find the right direction." },
-  { icon: CalendarCheck, no: "02", name: "AI Planner", title: "Turns goals into plans", copy: "Breaks your goals into realistic tasks, priorities, milestones, and calendar plans." },
-  { icon: BrainCircuit, no: "03", name: "AI Knowledge Specialist", title: "Connects ideas and knowledge", copy: "Connects your notes, knowledge, and related information to reveal new perspectives and useful insights." },
-  { icon: ChartNoAxesCombined, no: "04", name: "AI Evaluator", title: "Evaluates progress and results", copy: "Reviews your progress, checks results against your goals, and identifies gaps, risks, and areas to improve." },
-  { icon: Compass, no: "05", name: "AI Advisor", title: "Helps you make better decisions", copy: "Compares options, evaluates opportunities and risks, and recommends practical next steps." },
-  { icon: Target, no: "06", name: "AI Action Coach", title: "Helps you start what matters", copy: "Turns intentions into small, user-chosen actions, helps lower starting friction, and adapts when you learn something new." },
-];
 
 export default function Home() {
   return <Suspense fallback={<main className="wrap auth-gate-loading" role="status">Opening AIASK…</main>}><HomeContent /></Suspense>;
 }
 
 function HomeContent() {
+  const workflowAccount = useWorkspaceAccount();
+  const workflowOwnerId = workflowAccount.status === "ready" ? workflowAccount.userId : null;
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryString = searchParams.toString();
@@ -85,8 +86,8 @@ function HomeContent() {
   const [idea, setIdea] = useState("");
   const [saved, setSaved] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [workspaceMode, setWorkspaceMode] = useState<"day" | "tasks" | "ideas">("day");
   const [ideas, setIdeas] = useState<IdeaRecord[]>([]);
+  const [draftOrigin, setDraftOrigin] = useState<{ ownerId: string; conversationId: string } | null>(null);
   const [plannerData, setPlannerData] = useState<PlannerData>({ events: [], todos: [] });
   const [calendarCursor, setCalendarCursor] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [selectedCalendarDate, setSelectedCalendarDate] = useState(() => toDateInputValue(new Date()));
@@ -157,6 +158,8 @@ function HomeContent() {
   const openTodos = plannerData.todos.filter(todo => todo.status !== "Done");
   const doneTodos = plannerData.todos.filter(todo => todo.status === "Done");
   const activeReminder = plannerData.todos.find(todo => todo.id === activeReminderId && todo.status !== "Done") ?? null;
+  const calendarAIContext = buildCalendarPlannerContext(selectedCalendarDate, plannerData.events, plannerData.todos, ideas);
+  const todosAIContext = buildTodoPlannerContext(plannerData.todos, plannerData.events, ideas);
 
   useEffect(() => {
     setHydrated(true);
@@ -197,11 +200,20 @@ function HomeContent() {
   useEffect(() => {
     const params = new URLSearchParams(queryString);
     setCaptureOpen(params.get("capture") === "1");
+    if (params.get("continue") === "1" && workflowAccount.status === "loading") return;
     try {
       if (params.get("continue") === "1") {
         const nextStep = window.localStorage.getItem("aiask-next-step-draft")?.trim();
         if (nextStep) {
           setTodoTitle(nextStep);
+          const rawOrigin = window.localStorage.getItem("aiask-next-step-origin");
+          const origin: unknown = rawOrigin ? JSON.parse(rawOrigin) : null;
+          if (origin && typeof origin === "object" && "ownerId" in origin && "conversationId" in origin &&
+            typeof origin.ownerId === "string" && typeof origin.conversationId === "string" &&
+            workflowAccount.status === "ready" && origin.ownerId === workflowOwnerId) {
+            setDraftOrigin({ ownerId: origin.ownerId, conversationId: origin.conversationId });
+          }
+          window.localStorage.removeItem("aiask-next-step-origin");
           setPlannerNotice("Review this next step, choose a due date or reminder, then add it to your To-do list.");
           window.localStorage.removeItem("aiask-next-step-draft");
         }
@@ -209,7 +221,7 @@ function HomeContent() {
     } catch {
       setStorageError("We couldn’t read your next-step draft from this browser.");
     }
-  }, [queryString]);
+  }, [queryString, workflowAccount.status, workflowOwnerId]);
 
   useEffect(() => {
     try {
@@ -494,14 +506,38 @@ function HomeContent() {
     }
   }
 
+  function confirmAIPlannerChange(change: PlannerChange, conversationId: string): string | null {
+    const applied = applyPlannerChange(plannerData, change, {
+      now: new Date().toISOString(),
+      ownerId: workflowOwnerId ?? undefined,
+      conversationId,
+      createId: () => crypto.randomUUID(),
+    });
+    if (!applied.ok) return applied.error;
+    if (!applied.changed) return "There is no change to save.";
+    if (!persistPlanner(applied.planner)) return "The change could not be saved. Check browser storage and try again.";
+    if (applied.createdTodo) {
+      window.dispatchEvent(new CustomEvent(TASK_CREATED_EVENT, {
+        detail: { record: applied.createdTodo, createdAt: applied.createdTodo.createdAt ?? new Date().toISOString() },
+      }));
+    }
+    if (applied.selectedDate) {
+      const selectedDate = dateFromInput(applied.selectedDate);
+      setSelectedCalendarDate(applied.selectedDate);
+      setCalendarCursor(new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1));
+    }
+    return null;
+  }
+
   function addCalendarEvent(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!eventTitle.trim() || !eventDate) return;
     const now = new Date().toISOString();
     const eventId = crypto.randomUUID();
     const todoId = crypto.randomUUID();
-    const calendarEvent: PlannerEvent = { id: eventId, todoId, ideaId: eventIdeaId || null, title: eventTitle.trim(), scheduledDate: eventDate, scheduledTime: eventTime || null, description: eventTitle.trim(), priority: eventPriority, createdAt: now, origin: "calendar" };
-    const linkedTodo: PlannerTodo = { id: todoId, eventId, ideaId: eventIdeaId || null, title: eventTitle.trim(), dueDate: eventDate, status: "Open", priority: eventPriority, createdAt: now };
+    const ownerId = workflowAccount.status === "ready" ? workflowAccount.userId ?? undefined : undefined;
+    const calendarEvent: PlannerEvent = { ownerId, id: eventId, todoId, ideaId: eventIdeaId || null, title: eventTitle.trim(), scheduledDate: eventDate, scheduledTime: eventTime || null, description: eventTitle.trim(), priority: eventPriority, createdAt: now, origin: "calendar" };
+    const linkedTodo: PlannerTodo = { ownerId, id: todoId, eventId, ideaId: eventIdeaId || null, title: eventTitle.trim(), dueDate: eventDate, status: "Open", priority: eventPriority, createdAt: now };
     if (persistPlanner({ events: [...plannerData.events, calendarEvent], todos: [...plannerData.todos, linkedTodo] })) {
       setSelectedCalendarDate(eventDate);
       setCalendarCursor(new Date(dateFromInput(eventDate).getFullYear(), dateFromInput(eventDate).getMonth(), 1));
@@ -522,19 +558,22 @@ function HomeContent() {
     const now = new Date().toISOString();
     const todoId = crypto.randomUUID();
     const eventId = todoDueDate ? crypto.randomUUID() : null;
-    const todo: PlannerTodo = { id: todoId, eventId, ideaId: todoIdeaId || null, title: todoTitle.trim(), dueDate: todoDueDate, status: "Open", priority: todoPriority, createdAt: now, updatedAt: now, remindAt: reminderDate?.toISOString() };
-    const calendarEvent: PlannerEvent | null = eventId ? { id: eventId, todoId, ideaId: todoIdeaId || null, title: todo.title, scheduledDate: todoDueDate, scheduledTime: null, description: todo.title, priority: todoPriority, createdAt: now, origin: "task-deadline" } : null;
+    const ownerId = workflowAccount.status === "ready" ? workflowAccount.userId ?? undefined : undefined;
+    const hasDraftOrigin = workflowAccount.status === "ready" && workflowAccount.userId === draftOrigin?.ownerId;
+    const todo: PlannerTodo = { ownerId, originConversationId: hasDraftOrigin ? draftOrigin?.conversationId : undefined, id: todoId, eventId, ideaId: todoIdeaId || null, title: todoTitle.trim(), dueDate: todoDueDate, status: "Open", priority: todoPriority, createdAt: now, updatedAt: now, remindAt: reminderDate?.toISOString() };
+    const calendarEvent: PlannerEvent | null = eventId ? { ownerId, id: eventId, todoId, ideaId: todoIdeaId || null, title: todo.title, scheduledDate: todoDueDate, scheduledTime: null, description: todo.title, priority: todoPriority, createdAt: now, origin: "task-deadline" } : null;
     const nextPlanner: PlannerData = {
       todos: [todo, ...plannerData.todos],
       events: calendarEvent ? [...plannerData.events, calendarEvent] : plannerData.events,
     };
     if (persistPlanner(nextPlanner)) {
+      window.dispatchEvent(new CustomEvent(TASK_CREATED_EVENT, { detail: { record: todo, createdAt: now } }));
       if (todoDueDate) {
         const dueDate = dateFromInput(todoDueDate);
         setSelectedCalendarDate(todoDueDate);
         setCalendarCursor(new Date(dueDate.getFullYear(), dueDate.getMonth(), 1));
       }
-      setTodoTitle(""); setTodoDueDate(""); setTodoReminderAt(""); setTodoIdeaId(""); setNewTodoPriority("onTrack");
+      setTodoTitle(""); setDraftOrigin(null); setTodoDueDate(""); setTodoReminderAt(""); setTodoIdeaId(""); setNewTodoPriority("onTrack");
       setPlannerNotice(calendarEvent
         ? `“${todo.title}” was added to To-do and Calendar for ${formatScheduleDate(todoDueDate)}${reminderDate ? `, with a reminder for ${formatDate(reminderDate.toISOString())}` : ""}.`
         : `“${todo.title}” was added to To-do${reminderDate ? `, with a reminder for ${formatDate(reminderDate.toISOString())}` : ". Add a due date to also place it on Calendar."}`);
@@ -610,12 +649,6 @@ function HomeContent() {
     setSelectedCalendarDate(toDateInputValue(nextMonth));
   }
 
-  function openCalendarDate(date: string) {
-    const selected = dateFromInput(date);
-    setCalendarCursor(new Date(selected.getFullYear(), selected.getMonth(), 1));
-    setSelectedCalendarDate(date);
-    setView("calendar");
-  }
 
   function togglePlannerTodo(todoId: string) {
     const currentTodo = plannerData.todos.find(todo => todo.id === todoId);
@@ -664,7 +697,7 @@ function HomeContent() {
       <a className="brand" href="#top" aria-label="AIASK home" onClick={event => { if (view !== "home") { event.preventDefault(); setView("home"); } }}><span className="brand-mark"><Sparkles size={17} /></span>aiask<span className="brand-dot">.</span></a>
       <button className="mobile-menu" aria-label="Toggle menu" onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X /> : <Menu />}</button>
       <nav className={menuOpen ? "nav-links open" : "nav-links"}>
-        <a href="/about" onClick={() => setMenuOpen(false)}>About Us</a><a href="/partners" onClick={() => setMenuOpen(false)}>AI Team</a><a href="/workspace" onClick={() => setMenuOpen(false)}>My Workspace</a>
+        <a href="/partners" onClick={() => setMenuOpen(false)}>AI Team</a><a href="/workspace" onClick={() => setMenuOpen(false)}>My Workspace</a>
         <button className={view === "calendar" ? "nav-cta active" : "nav-cta"} onClick={() => { setView("calendar"); setMenuOpen(false); }}><CalendarDays size={15}/> Calendar</button>
         <button className={view === "todos" ? "nav-cta active" : "nav-cta"} onClick={() => { setView("todos"); setMenuOpen(false); }}><Check size={15}/> To-do{openTodos.length > 0 && <span className="nav-count">{openTodos.length}</span>}</button>
         <button className={view === "inbox" ? "nav-cta active" : "nav-cta"} onClick={() => { setView(view === "inbox" ? "home" : "inbox"); setSelectedIdea(null); setMenuOpen(false); }}><Inbox size={15}/> Idea Box{ideas.length > 0 && <span className="nav-count">{ideas.length}</span>}</button>
@@ -682,6 +715,7 @@ function HomeContent() {
 
     {!hydrated || (isSupabaseConfigured() && !authReady) ? <div className="wrap auth-gate-loading" role="status">Checking your sign-in…</div> : <>
     {isSupabaseConfigured() && (view !== "home" || captureOpen) && <div className="wrap local-data-notice" role="status"><b>Local demo data</b><span>Your ideas, to-dos, and calendar items still live in this browser. They are not yet synced to your account.</span></div>}
+    {(view === "calendar" || view === "todos") && <TaskCreationBridge />}
 
     {view === "inbox" ? (
       <section className="idea-box wrap">
@@ -750,6 +784,7 @@ function HomeContent() {
       </section>
     ) : view === "calendar" ? <section className="planner-page wrap">
       <button className="planner-back" onClick={() => setView("home")}><ArrowLeft size={14}/> Back to AIASK</button><div className="planner-page-heading"><div><div className="section-kicker">YOUR TIME, IN ONE PLACE</div><h1>AIASK <em>Calendar.</em></h1><p>Plans and next steps connected to the ideas behind them.</p></div><div className="planner-total"><CalendarDays size={17}/><span>{plannerData.events.length} {plannerData.events.length === 1 ? "event" : "events"}</span></div></div>
+      <PlannerAIChat key={workflowOwnerId ?? "local"} scope="calendar" context={calendarAIContext} userId={workflowOwnerId} onConfirm={(change, conversationId) => confirmAIPlannerChange(change, conversationId)} />
       {plannerNotice && <div className="planner-sync-notice" role="status" aria-live="polite"><Check size={15}/><span>{plannerNotice}</span><button type="button" onClick={() => setPlannerNotice("")} aria-label="Dismiss notification"><X size={14}/></button></div>}
       <div className="calendar-layout"><section className="calendar-panel"><div className="calendar-toolbar"><button aria-label="Previous month" onClick={() => changeCalendarMonth(-1)}><ArrowLeft size={15}/></button><h2>{new Intl.DateTimeFormat(defaultLocale, { month: "long", year: "numeric" }).format(calendarCursor)}</h2><button aria-label="Next month" onClick={() => changeCalendarMonth(1)}><ArrowRight size={15}/></button><button className="calendar-today" onClick={() => { const today = new Date(); setCalendarCursor(new Date(today.getFullYear(), today.getMonth(), 1)); setSelectedCalendarDate(toDateInputValue(today)); }}>Today</button></div><div className="calendar-priority-legend" aria-label="Priority color key"><span><i className="priority-urgent"/>Urgent</span><span><i className="priority-attention"/>Attention</span><span><i className="priority-onTrack"/>On Track</span></div><div className="calendar-weekdays">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(day => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{calendarDates.map(day => { const dayEvents = plannerData.events.filter(event => event.scheduledDate === day.date); const priorityCounts = countEventPriorities(dayEvents, plannerData.todos); const prioritySummary = (["urgent", "attention", "onTrack"] as const).filter(priority => priorityCounts[priority] > 0); const accessibleSummary = prioritySummary.map(priority => `${priorityCounts[priority]} ${priority === "urgent" ? "urgent" : priority === "attention" ? "attention" : "on track"}`).join(", "); return <button key={day.date} aria-label={`${formatScheduleDate(day.date)}${dayEvents.length ? `, ${accessibleSummary}` : ", no events"}`} className={`calendar-day${day.inMonth ? "" : " outside"}${selectedCalendarDate === day.date ? " selected" : ""}${day.date === toDateInputValue(new Date()) ? " today" : ""}`} onClick={() => setSelectedCalendarDate(day.date)}><span>{day.day}</span>{prioritySummary.length > 0 ? <span className="calendar-priority-summary" aria-hidden="true">{prioritySummary.map(priority => <span className={`calendar-priority-count priority-${priority}`} key={priority}><i />{priorityCounts[priority]}</span>)}</span> : <span className="calendar-no-events" aria-hidden="true">—</span>}</button>; })}</div></section>
         <aside className="calendar-agenda"><div className="agenda-heading"><div><div className="section-kicker">DAY AGENDA</div><h2>{formatScheduleDate(selectedCalendarDate)}</h2></div><span>{selectedDateEvents.length}</span></div>{selectedDateEvents.length === 0 ? <div className="agenda-empty">Nothing planned for this day yet.</div> : selectedDateEvents.map(event => { const priority = priorityForEvent(event); return <article className={`agenda-event priority-event-${priority}`} key={event.id}><div className="agenda-event-time">{event.scheduledTime ?? "ALL DAY"}</div><h3>{event.title}</h3><PriorityControl value={priority} onChange={value => setEventPriority(event.id, value)} label={`Priority for ${event.title}`} className="compact"/>{event.description !== event.title && <p>{event.description}</p>}{event.ideaId && <small>Linked to: {ideas.find(item => item.id === event.ideaId)?.text.slice(0, 58) ?? "Saved idea"}</small>}<div className="agenda-event-actions"><button onClick={() => event.todoId && togglePlannerTodo(event.todoId)}><Check size={13}/> {plannerData.todos.find(todo => todo.id === event.todoId)?.status ?? "Open"} to-do</button><button aria-label="Delete calendar event" onClick={() => deleteCalendarEvent(event.id)}><Trash2 size={13}/></button></div></article>; })}
@@ -757,89 +792,30 @@ function HomeContent() {
         </aside></div>
     </section> : view === "todos" ? <section className="planner-page wrap">
       <button className="planner-back" onClick={() => setView("home")}><ArrowLeft size={14}/> Back to AIASK</button><div className="planner-page-heading"><div><div className="section-kicker">SMALL STEPS, KEPT VISIBLE</div><h1>Your <em>To-do list.</em></h1><p>Set a due date to add the task to Calendar automatically. Add a reminder and AIASK will bring the next step back at the time you choose.</p></div><div className="planner-total"><Check size={17}/><span>{openTodos.length} open</span></div></div>
+      <PlannerAIChat key={workflowOwnerId ?? "local"} scope="todos" context={todosAIContext} userId={workflowOwnerId} onConfirm={(change, conversationId) => confirmAIPlannerChange(change, conversationId)} />
       {plannerNotice && <div className="planner-sync-notice" role="status" aria-live="polite"><Check size={15}/><span>{plannerNotice}</span><button type="button" onClick={() => setPlannerNotice("")} aria-label="Dismiss notification"><X size={14}/></button></div>}
       <div className="todo-layout"><form className="planner-form todo-create-form" onSubmit={addTodo}><div className="section-kicker">ADD A TO-DO</div>{openTodos.length === 0 && doneTodos.length === 0 && <p className="reminder-first-use">Start with one real task. AIASK can remind you when it is time to take the next step.</p>}<label htmlFor="todo-title">What needs doing?</label><input id="todo-title" required value={todoTitle} onChange={event => setTodoTitle(event.target.value)} placeholder="Write a clear next step"/><label htmlFor="todo-date">Due date <span>Optional</span></label><input id="todo-date" type="date" value={todoDueDate} onChange={event => setTodoDueDate(event.target.value)}/><small className="planner-sync-hint">{todoDueDate ? "This task will also appear on Calendar as an all-day item." : "Choose a date to link this task to Calendar."}</small><label htmlFor="todo-reminder">Remind me <span>Optional</span></label><input id="todo-reminder" type="datetime-local" min={toDateTimeLocalValue(new Date(Date.now() + 60_000))} value={todoReminderAt} onChange={event => { setTodoReminderAt(event.target.value); setReminderError(""); }}/><small className="planner-sync-hint">AIASK checks reminders while this page is open. You can enable browser notifications for a desktop alert.</small><div className="notification-permission-row">{notificationPermission === "default" && <button type="button" onClick={enableBrowserNotifications}><Bell size={13}/> Enable browser notifications</button>}{notificationPermission === "granted" && <span><Bell size={13}/> Browser notifications enabled</span>}{notificationPermission === "denied" && <span>Browser notifications are blocked. In-app reminders still work while AIASK is open.</span>}{notificationPermission === "unsupported" && <span>In-app reminders work while AIASK is open.</span>}</div>{reminderError && <p className="reminder-error" role="alert">{reminderError}</p>}<label htmlFor="todo-idea">Related idea <span>Optional</span></label><select id="todo-idea" value={todoIdeaId} onChange={event => setTodoIdeaId(event.target.value)}><option value="">No linked idea</option>{ideas.map(item => <option key={item.id} value={item.id}>{item.text.replace(/\s+/g, " ").slice(0, 60)}</option>)}</select><PriorityControl value={todoPriority} onChange={setNewTodoPriority} label="Priority for new to-do" className="priority-form-control"/><button className="button button-dark" type="submit"><Plus size={14}/> {todoDueDate ? "Add to-do & Calendar" : "Add to-do"}</button></form>
         <div className="todo-list-panel"><div className="todo-list-heading"><div><div className="section-kicker">UP NEXT</div><h2>{openTodos.length} open {openTodos.length === 1 ? "task" : "tasks"}</h2></div></div>{openTodos.length === 0 && doneTodos.length === 0 ? <div className="todo-empty"><span className="empty-icon"><Check size={21}/></span><h3>Your list is clear.</h3><p>Add a next step or create one from a calendar event.</p></div> : <>{openTodos.slice().sort((a, b) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999")).map(todo => <article className="todo-item" key={todo.id}><button className="todo-check-button" aria-label="Mark to-do complete" onClick={() => togglePlannerTodo(todo.id)}><span/></button><div className="todo-item-copy"><h3>{todo.title}</h3><div className="todo-item-meta">{todo.dueDate && <span><CalendarDays size={12}/> Due {formatScheduleDate(todo.dueDate)}</span>}{todo.remindAt && <span><Clock3 size={12}/> Reminder {formatDate(todo.remindAt)}</span>}{todo.eventId && <span>Calendar linked</span>}{todo.ideaId && <span>Idea: {ideas.find(item => item.id === todo.ideaId)?.text.replace(/\s+/g, " ").slice(0, 45) ?? "Saved idea"}</span>}</div></div><PriorityControl value={todo.priority} onChange={value => setTodoPriority(todo.id, value)} label={`Priority for ${todo.title}`}/><button className="todo-delete" aria-label="Delete to-do" onClick={() => deleteTodo(todo.id)}><Trash2 size={14}/></button></article>)}{doneTodos.length > 0 && <><div className="section-kicker todo-done-heading">COMPLETED · {doneTodos.length}</div>{doneTodos.map(todo => <article className="todo-item done" key={todo.id}><button className="todo-check-button checked" aria-label="Reopen to-do" onClick={() => togglePlannerTodo(todo.id)}><Check size={13}/></button><div className="todo-item-copy"><h3>{todo.title}</h3><div className="todo-item-meta"><span>Completed</span>{todo.dueDate && <span>Due {formatScheduleDate(todo.dueDate)}</span>}</div></div><PriorityControl value={todo.priority} onChange={value => setTodoPriority(todo.id, value)} label={`Priority for ${todo.title}`}/><button className="todo-delete" aria-label="Delete to-do" onClick={() => deleteTodo(todo.id)}><Trash2 size={14}/></button></article>)}</>}</>}</div>
       </div>
     </section> : <>
 
-    <section className="hero wrap" id="top">
-      <div className="hero-copy">
-        <div className="eyebrow"><span className="pulse" /> A more proactive kind of AI</div>
-        <h1>Your next good<br />move starts <em>here.</em></h1>
-        <p className="hero-intro">Life doesn’t wait for the perfect prompt. AIASK helps you catch ideas, make a plan, and keep moving toward what matters.</p>
-        <form className="hero-composer" onSubmit={captureFromHome}>
-          <div className="composer-top"><span className="composer-avatar"><Sparkles size={14}/></span><span>AIASK <i>is listening</i></span><span className="composer-live"><i/> READY</span></div>
-          <label className="sr-only" htmlFor="home-idea">Share an idea with AIASK</label>
-          <textarea id="home-idea" value={homeIdea} onChange={event => { setHomeIdea(event.target.value); setHomeIdeaSaved(false); }} placeholder="What’s on your mind? Share an idea, a note, or something to remember…" rows={2}/>
-          <div className="composer-bottom"><span>✳ &nbsp;Start anywhere. No perfect prompt needed.</span><button className="button button-dark" type="submit" disabled={!homeIdea.trim() || !storageReady}>Capture <ArrowUpRight size={15}/></button></div>
+    <LandingPage
+      onOpenView={next => { setView(next); setMenuOpen(false); }}
+      capture={<>
+        <form className="lp-capture-form" onSubmit={captureFromHome}>
+          <label className="lp-capture-label" htmlFor="home-idea">What’s your idea?</label>
+          <textarea id="home-idea" value={homeIdea} onChange={event => { setHomeIdea(event.target.value); setHomeIdeaSaved(false); }}
+            placeholder="A problem you’d love to solve. Something you want to create. A possibility worth exploring…" rows={3} />
+          <div><small>Keep it in your Idea Box. Explore when you’re ready.</small><button type="submit" disabled={!homeIdea.trim() || !storageReady}>Save my idea <ArrowUpRight size={14} aria-hidden="true" /></button></div>
         </form>
-        {storageError && !captureOpen && <p className="storage-error hero-storage-error" role="alert">{storageError}</p>}
-        {homeIdeaSaved && <div className="home-capture-confirm" role="status"><Check size={15}/> Saved to your Idea Box <button onClick={() => { setView("inbox"); setSelectedIdea(null); }}>Open Idea Box <ArrowRight size={13}/></button></div>}
-        <div className="hero-actions"><a className="text-link" href="#how">Meet your AI team <ArrowDown size={15} /></a></div>
-        <div className="hero-note"><span className="avatar-stack"><i>A</i><i>✳</i><i>Y</i></span><span>Built around your life, not another chatbot window.</span></div>
-      </div>
-      <div className="hero-art" aria-label="AIASK proactive planning dashboard preview">
-        <div className="orbit orbit-one"></div><div className="orbit orbit-two"></div><div className="orbit orbit-three"></div>
-        <div className="spark-node node-a">✳</div><div className="spark-node node-b"><CalendarDays size={17}/></div><div className="spark-node node-c"><Lightbulb size={17}/></div>
-        <div className="dashboard-card">
-          <div className="dash-top"><span className="dash-brand"><span className="mini-mark">✳</span> your day, in focus</span><span className="dash-date">MON · 21</span></div>
-          <div className="dash-greeting">A little momentum<br />goes a long way.</div>
-          <div className="proactive"><span className="proactive-icon"><Sparkles size={15}/></span><div><b>A thought for today</b><p>You mentioned wanting more time to write. There’s a quiet hour open at 10.</p><span className="suggestion-link">Make it a writing hour <ArrowRight size={12}/></span></div></div>
-          <div className="task-head"><span>YOUR PLAN</span><span>2 OF 4 DONE</span></div>
-          <div className="task-row done"><span className="task-check"><Check size={11}/></span><span>Review project notes</span><small>9:00</small></div>
-          <div className="task-row"><span className="task-check"></span><span>Focus time · draft outline</span><small>10:00</small></div>
-          <div className="task-row"><span className="task-check"></span><span>Walk + clear your head</span><small>12:30</small></div>
-          <div className="dash-footer"><span className="footer-spark">✳</span> You’ve got this. I’ll check in later.</div>
-        </div>
-        <div className="floating-note note-memory"><Brain size={15}/><span>Remembering your goals</span></div>
-        <div className="floating-note note-progress"><span className="progress-ring">↗</span><span>Small steps add up</span></div>
-      </div>
-      <a className="scroll-cue" href="#how"><span>SCROLL TO EXPLORE</span><ChevronDown size={14}/></a>
-    </section>
-
-    <section className="ticker"><div className="ticker-inner"><span>NOTICE</span><i>✳</i><span>PLAN</span><i>✳</i><span>REMEMBER</span><i>✳</i><span>NUDGE</span><i>✳</i><span>REFLECT</span><i>✳</i><span>REPEAT</span><i>✳</i><span>NOTICE</span><i>✳</i><span>PLAN</span></div></section>
-
-    <section className="section how-section wrap" id="how">
-      <div className="section-kicker">AN AI TEAM THAT PAYS ATTENTION</div>
-      <div className="section-heading"><h2>Less starting over.<br /><em>More moving forward.</em></h2><p>AIASK brings your ideas, plans, knowledge, and progress into one thoughtful loop. It can reach out with a timely nudge—and still leaves you in charge.</p></div>
-      <div className="steps-grid">
-        <article className="step-card step-capture"><div className="step-top"><span>01 / CAPTURE</span><span className="step-icon"><MessageCircle size={17}/></span></div><h3>Get it out<br />of your head.</h3><p>Save a passing thought, voice-note an idea, or ask AIASK to remember something for later.</p><div className="capture-demo"><span className="tiny-spark">✳</span><span>“I should call Maya about the workshop…”</span><ArrowRight size={14}/></div></article>
-        <article className="step-card step-plan"><div className="step-top"><span>02 / PLAN</span><span className="step-icon"><CalendarDays size={17}/></span></div><h3>Make a plan<br />that fits real life.</h3><p>Turn good intentions into clear next steps, with your time and energy in mind.</p><div className="plan-demo"><div><span className="plan-dot"></span>Draft workshop outline <small>Tomorrow · 10:00</small></div><Check size={14}/></div></article>
-        <article className="step-card step-learn"><div className="step-top"><span>03 / FOLLOW THROUGH</span><span className="step-icon"><ArrowRight size={17}/></span></div><h3>Keep going.<br />Adjust as you go.</h3><p>Get a helpful nudge, see how things went, and learn what actually works for you.</p><div className="learn-demo"><span className="learn-face">☺</span><span>Two focus blocks this week. Nice rhythm.</span></div></article>
-      </div>
-    </section>
-
-    <section className="roles-section" id="roles"><div className="wrap roles-wrap"><div className="roles-intro"><div className="section-kicker">SIX WAYS AIASK SHOWS UP</div><h2>One team.<br /><em>A whole lot of range.</em></h2><p>One AI core, with six specialized roles working together behind one calm, personal experience.</p><button className="button button-outline" onClick={() => openCheckIn()}>Check in on your ideas <ArrowUpRight size={15}/></button></div><div className="roles-grid">{roles.map(({icon: Icon,no,name,title,copy})=><article className="role-card" key={no}><div className="role-top"><span>{no}</span><Icon size={19}/></div><div className="role-name">{name}</div><h3>{title}</h3><p>{copy}</p></article>)}</div></div></section>
-
-    <section className="workspace-section wrap" id="workspace"><div className="workspace-top"><div><div className="section-kicker">YOUR LIFE, WITH A LITTLE MORE CLARITY</div><h2>One home for the<br /><em>things you’re building.</em></h2></div><p>Ideas connect to plans. Plans connect to your calendar. And your knowledge stays close when it’s time to make the next move.</p></div>
-      <div className="workspace-board"><aside className="board-sidebar"><div className="sidebar-brand"><span className="mini-mark">✳</span> aiask</div>
-        <button className={workspaceMode === "day" ? "side-link workspace-side-link active" : "side-link workspace-side-link"} onClick={() => setWorkspaceMode("day")}><CalendarDays size={15}/> My day</button>
-        <button className={workspaceMode === "tasks" ? "side-link workspace-side-link active" : "side-link workspace-side-link"} onClick={() => setWorkspaceMode("tasks")}><Check size={15}/> Tasks <span className="side-count">{openTodos.length}</span></button>
-        <button className={workspaceMode === "ideas" ? "side-link workspace-side-link active" : "side-link workspace-side-link"} onClick={() => setWorkspaceMode("ideas")}><Lightbulb size={15}/> Ideas <span className="side-count">{ideas.length}</span></button>
-        <button className="side-link workspace-side-link" onClick={() => { setSelectedCalendarDate(toDateInputValue(new Date())); setCalendarCursor(new Date(new Date().getFullYear(), new Date().getMonth(), 1)); setView("calendar"); }}><Brain size={15}/> Calendar <span className="side-count">{plannerData.events.length}</span></button>
-        <div className="sidebar-bottom"><span className="user-dot">Y</span><span>You, in the loop</span><ChevronDown size={13}/></div></aside>
-        <div className="board-main"><div className="board-header"><div><span className="board-date">{new Intl.DateTimeFormat(defaultLocale, { weekday: "long", month: "long", day: "numeric" }).format(new Date()).toUpperCase()}</span><h3>{workspaceMode === "ideas" ? "Your ideas" : workspaceMode === "tasks" ? "Your to-dos" : "Good morning, Alex"} <span>✳</span></h3><p>{workspaceMode === "ideas" ? "Saved thoughts, ready for their next step." : workspaceMode === "tasks" ? "Every open and completed task, in one place." : "Your calendar and next steps, connected."}</p></div><div className="workspace-actions"><button className="board-add" onClick={() => workspaceMode === "ideas" ? setCaptureOpen(true) : setView(workspaceMode === "tasks" ? "todos" : "calendar")}><Plus size={15}/> {workspaceMode === "ideas" ? "Add a thought" : workspaceMode === "tasks" ? "Manage tasks" : "Open calendar"}</button></div></div>
-          <div className="board-columns"><div className="board-column">
-            {workspaceMode === "ideas" ? <><div className="column-label">SAVED IDEAS <span>{ideas.length}</span></div>{ideas.length === 0 ? <div className="workspace-empty"><p>Your Idea Box is ready for its first thought.</p><button onClick={() => setCaptureOpen(true)}>Capture an idea <ArrowRight size={13}/></button></div> : ideas.map(item => <button className="workspace-idea-row" key={item.id} onClick={() => { setSelectedIdea(item); setView("inbox"); }}><Lightbulb size={14}/><span><b>{item.text}</b><small>{item.status ?? "Saved"} · {formatDate(item.createdAt)}</small></span><ArrowUpRight size={14}/></button>)}</> : <>
-              <div className="column-label">{workspaceMode === "tasks" ? "ALL TO-DOS" : "UP NEXT"} <span>{workspaceMode === "tasks" ? plannerData.todos.length : openTodos.length + plannerData.events.length}</span></div>
-              {(workspaceMode === "tasks" ? [...openTodos, ...doneTodos] : [...openTodos].sort((a, b) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999"))).length === 0 && plannerData.events.length === 0 ? <div className="workspace-empty"><p>No tasks or calendar plans here yet.</p><button onClick={() => setView("todos")}>Add your first to-do <ArrowRight size={13}/></button></div> : <>
-                {(workspaceMode === "tasks" ? [...openTodos, ...doneTodos] : [...openTodos].sort((a, b) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999"))).map(todo => { const linkedIdea = ideas.find(item => item.id === todo.ideaId); return <div className={todo.status === "Done" ? "workspace-item done" : "workspace-item"} key={todo.id}><button className="workspace-check" aria-label={todo.status === "Done" ? "Reopen task" : "Complete task"} onClick={() => togglePlannerTodo(todo.id)}>{todo.status === "Done" && <Check size={12}/>}</button><button className="workspace-item-copy" onClick={() => setView("todos")}><b>{todo.title}</b><small>{todo.dueDate ? `Due ${formatScheduleDate(todo.dueDate)}` : "No due date"}{linkedIdea ? ` · ${linkedIdea.text}` : ""}</small></button><button className="workspace-open" onClick={() => setView("todos")}>Open</button></div>; })}
-                {workspaceMode === "day" && plannerData.events.length > 0 && <><div className="column-label later-label">CALENDAR <span>{plannerData.events.length}</span></div>{[...plannerData.events].sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate) || (a.scheduledTime ?? "").localeCompare(b.scheduledTime ?? "")).map(event => <button className="workspace-event-row" key={event.id} onClick={() => openCalendarDate(event.scheduledDate)}><CalendarDays size={14}/><span><b>{event.title}</b><small>{formatScheduleDate(event.scheduledDate)}{event.scheduledTime ? ` · ${event.scheduledTime}` : " · All day"}</small></span><ArrowUpRight size={13}/></button>)}</>}
-              </>}
-            </>}
-          </div><div className="board-side"><div className="coach-card"><div className="coach-icon"><Sparkles size={16}/></div><span className="coach-label">YOUR WORKSPACE</span><p>{openTodos.length} open {openTodos.length === 1 ? "task" : "tasks"} · {plannerData.events.length} calendar {plannerData.events.length === 1 ? "item" : "items"} · {ideas.length} saved {ideas.length === 1 ? "idea" : "ideas"}</p><button onClick={() => openCheckIn()}>Check in on progress <ArrowRight size={13}/></button></div><div className="week-card"><span>TO-DO PROGRESS</span><div className="week-stat">{doneTodos.length}<span> / {plannerData.todos.length}</span></div><p>tasks completed</p><div className="workspace-progress"><i style={{ width: `${plannerData.todos.length ? doneTodos.length / plannerData.todos.length * 100 : 0}%` }}/></div></div><button className="workspace-calendar-link" onClick={() => setView("calendar")}><CalendarDays size={14}/> Browse full calendar <ArrowRight size={13}/></button></div></div>
-        </div>
-      </div>
-    </section>
-
-    <section className="quote-section"><div className="wrap quote-inner"><span className="quote-mark">“</span><blockquote>The best AI doesn’t just answer you.<br /><em>It helps you become who you meant to be.</em></blockquote><div className="quote-foot"><span>AIASK · YOUR PERSONAL AI TEAM</span><span>ALWAYS IN YOUR CORNER <span className="quote-star">✳</span></span></div></div></section>
-
-    <section className="final-cta wrap"><span className="cta-orb orb-left">✳</span><span className="cta-orb orb-right">✳</span><div className="eyebrow"><span className="pulse"/> YOUR NEXT CHAPTER, WITH YOUR AI TEAM</div><h2>What’s on your mind?</h2><p>A big ambition, a small reminder, a “someday” idea.<br />Start anywhere. AIASK will help you find the next step.</p><button className="button button-dark" onClick={() => setCaptureOpen(true)}>Drop in a thought <ArrowUpRight size={16}/></button><span className="cta-note">No perfect prompt needed. Just you, as you are.</span></section>
-
-    <footer className="footer wrap"><a className="brand" href="#top"><span className="brand-mark"><Sparkles size={17}/></span>aiask<span className="brand-dot">.</span></a><span>More intention. Less mental clutter.</span><div><a href="#how">How it works</a><a href="#roles">AI team</a><a href="#top">Back to top ↑</a></div><small>© 2026 AIASK</small></footer>
+        {storageError && !captureOpen && <p className="storage-error" role="alert">{storageError}</p>}
+        {homeIdeaSaved && <div className="lp-capture-confirm" role="status"><Check size={14} />Saved to your Idea Box <button type="button" onClick={() => { setView("inbox"); setSelectedIdea(null); }}>Open Idea Box <ArrowRight size={13} /></button></div>}
+      </>}
+    />
 
     </>}
+
+    {view !== "home" && <footer className="page-footer wrap"><a href="/about">About Us</a></footer>}
 
     {view === "inbox" && selectedIdea && (() => {
       const display = ideaTitleAndSummary(selectedIdea.text);

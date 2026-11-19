@@ -73,6 +73,19 @@ export type AIASKProposedAction = {
   requiresConfirmation: true;
 };
 
+export type PlannerChange = {
+  action: "none" | "create_task" | "update_task" | "delete_task" | "create_calendar_event" | "update_calendar_event" | "delete_calendar_event";
+  targetId: string | null;
+  fields: Array<"title" | "dueDate" | "scheduledDate" | "scheduledTime" | "status" | "priority" | "ideaId">;
+  title: string | null;
+  dueDate: string | null;
+  scheduledDate: string | null;
+  scheduledTime: string | null;
+  status: "Open" | "Done" | null;
+  priority: "urgent" | "attention" | "onTrack" | null;
+  ideaId: string | null;
+};
+
 export type AIASKOutput = {
   conversationId?: string;
   messageId?: string;
@@ -85,6 +98,7 @@ export type AIASKOutput = {
   suggestions?: AIASKSuggestion[];
   risks?: AIASKRisk[];
   proposedActions?: AIASKProposedAction[];
+  plannerChange?: PlannerChange;
   knowledgeReferences?: Array<{
     title: string;
     url?: string;
@@ -120,6 +134,7 @@ export type AIASKRunRequest =
       originalIdea: string;
       perspectiveContext: string;
       history: PartnerFollowUpMessage[];
+      plannerChat?: true;
       retryMessageId?: string;
     };
 
@@ -202,7 +217,7 @@ function validateContext(value: unknown): ValidationResult<AIASKContext | undefi
   }
 
   for (const field of ["relevantNotes", "relevantDecisions", "relevantTasks", "relevantCalendarItems"] as const) {
-    const result = validateStringList(value[field], field);
+    const result = validateStringList(value[field], field, field === "relevantTasks" || field === "relevantCalendarItems" ? 100 : 50);
     if (!result.success) return result;
     if (result.data !== undefined) context[field] = result.data;
   }
@@ -294,6 +309,12 @@ export function parseAIASKRunRequest(value: unknown): ValidationResult<AIASKRunR
   if (!isRecord(value)) return { success: false, error: "The AI request must be a JSON object." };
 
   const isFollowUp = value.mode === "follow_up" || value.role === "partner_follow_up";
+  if (value.plannerChat !== undefined && value.plannerChat !== true) {
+    return { success: false, error: "plannerChat must be true when provided." };
+  }
+  if (value.plannerChat === true && !isFollowUp) {
+    return { success: false, error: "Planner chat must use the existing follow-up conversation mode." };
+  }
   const historyResult = isFollowUp ? validateFollowUpHistory(value.history) : null;
   if (historyResult && !historyResult.success) return historyResult;
 
@@ -333,6 +354,9 @@ export function parseAIASKRunRequest(value: unknown): ValidationResult<AIASKRunR
   if (typeof value.perspectiveContext !== "string" || value.perspectiveContext.length > 8000) {
     return { success: false, error: "perspectiveContext must be a string of at most 8,000 characters." };
   }
+  if (value.plannerChat === true && parsedInput.data.partnerRole !== PARTNER_ROLE_ID.planner) {
+    return { success: false, error: "Planner chat requires the AI Planner role." };
+  }
 
   return {
     success: true,
@@ -342,6 +366,7 @@ export function parseAIASKRunRequest(value: unknown): ValidationResult<AIASKRunR
       originalIdea: originalIdea.trim(),
       perspectiveContext: value.perspectiveContext,
       history: historyResult && historyResult.success ? historyResult.data : [],
+      ...(value.plannerChat === true ? { plannerChat: true } : {}),
       ...(retryMessageId ? { retryMessageId } : {}),
     },
   };
@@ -371,6 +396,55 @@ function validateProposedAction(value: unknown): value is AIASKProposedAction {
     && (value.description === undefined || isNonEmptyString(value.description, 5000))
     && (value.actionType === "create_task" || value.actionType === "create_calendar_event" || value.actionType === "save_note" || value.actionType === "link_idea" || value.actionType === "other")
     && value.requiresConfirmation === true;
+}
+
+export function validatePlannerChange(value: unknown): PlannerChange | null {
+  if (!isRecord(value)
+    || !["none", "create_task", "update_task", "delete_task", "create_calendar_event", "update_calendar_event", "delete_calendar_event"].includes(String(value.action))) return null;
+  const nullableText = (item: unknown, maximumLength: number) => item === null || isNonEmptyString(item, maximumLength);
+  const nullableDate = (item: unknown) => item === null || (
+    typeof item === "string" && /^\d{4}-\d{2}-\d{2}$/.test(item)
+    && Number.isFinite(Date.parse(`${item}T12:00:00`))
+    && new Date(`${item}T12:00:00`).toISOString().slice(0, 10) === item
+  );
+  const nullableTime = (item: unknown) => item === null || (typeof item === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(item));
+  if (!nullableText(value.targetId, 200)
+    || !Array.isArray(value.fields)
+    || value.fields.some(field => !["title", "dueDate", "scheduledDate", "scheduledTime", "status", "priority", "ideaId"].includes(String(field)))
+    || new Set(value.fields).size !== value.fields.length
+    || !nullableText(value.title, 300)
+    || !nullableDate(value.dueDate)
+    || !nullableDate(value.scheduledDate)
+    || !nullableTime(value.scheduledTime)
+    || (value.status !== null && value.status !== "Open" && value.status !== "Done")
+    || (value.priority !== null && value.priority !== "urgent" && value.priority !== "attention" && value.priority !== "onTrack")
+    || !nullableText(value.ideaId, 200)) return null;
+
+  const action = value.action as PlannerChange["action"];
+  if (action === "none") {
+    if (value.fields.length !== 0 || [value.targetId, value.title, value.dueDate, value.scheduledDate, value.scheduledTime, value.status, value.priority, value.ideaId].some(item => item !== null)) return null;
+  } else if (action === "create_task" || action === "create_calendar_event") {
+    if (value.targetId !== null || value.fields.length !== 0 || !isNonEmptyString(value.title, 300)) return null;
+    if (action === "create_calendar_event" && !nullableDate(value.scheduledDate)) return null;
+  } else if (action === "delete_task" || action === "delete_calendar_event") {
+    if (value.fields.length !== 0 || !isNonEmptyString(value.targetId, 200)) return null;
+  } else {
+    if (!isNonEmptyString(value.targetId, 200)) return null;
+    if (value.fields.length === 0) return null;
+    const applicableFields = action === "update_task"
+      ? ["title", "dueDate", "status", "priority", "ideaId"]
+      : ["title", "scheduledDate", "scheduledTime", "priority", "ideaId"];
+    if (value.fields.some(field => !applicableFields.includes(field))) return null;
+    if (value.fields.includes("title") && !isNonEmptyString(value.title, 300)) return null;
+    if (value.fields.includes("dueDate") && !nullableDate(value.dueDate)) return null;
+    if (value.fields.includes("scheduledDate") && !nullableDate(value.scheduledDate)) return null;
+    if (value.fields.includes("scheduledTime") && !nullableTime(value.scheduledTime)) return null;
+    if (value.fields.includes("status") && value.status === null) return null;
+    if (value.fields.includes("priority") && value.priority === null) return null;
+    if (action === "update_calendar_event" && value.fields.includes("scheduledDate") && value.scheduledDate === null) return null;
+  }
+
+  return { ...value, fields: value.fields as PlannerChange["fields"] } as PlannerChange;
 }
 
 export function validatePartnerResponse(value: unknown): PartnerResponse | null {
@@ -412,6 +486,7 @@ export function validateAIASKOutput(value: unknown): AIASKOutput | null {
   if (value.suggestions !== undefined && (!Array.isArray(value.suggestions) || value.suggestions.length > 50 || !value.suggestions.every(validateAIASKSuggestion))) return null;
   if (value.risks !== undefined && (!Array.isArray(value.risks) || value.risks.length > 50 || !value.risks.every(validateAIASKRisk))) return null;
   if (value.proposedActions !== undefined && (!Array.isArray(value.proposedActions) || value.proposedActions.length > 50 || !value.proposedActions.every(validateProposedAction))) return null;
+  if (value.plannerChange !== undefined && !validatePlannerChange(value.plannerChange)) return null;
   if (value.knowledgeReferences !== undefined) {
     if (!Array.isArray(value.knowledgeReferences) || value.knowledgeReferences.length > 100) return null;
     for (const reference of value.knowledgeReferences) {

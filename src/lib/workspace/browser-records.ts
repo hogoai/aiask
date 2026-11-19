@@ -5,8 +5,8 @@ export type IdeaStatus = "Saved" | "In progress" | "Done";
 export type Priority = "urgent" | "attention" | "onTrack";
 export type IdeaRecord = { id: string; text: string; createdAt: string; updatedAt?: string; status?: IdeaStatus; nextStep?: string; progressUpdatedAt?: string };
 export type CalendarOrigin = "calendar" | "task-deadline";
-export type PlannerEvent = { id: string; ideaId: string | null; todoId: string | null; title: string; scheduledDate: string; scheduledTime: string | null; priority?: Priority; origin?: CalendarOrigin };
-export type PlannerTodo = { id: string; ideaId: string | null; eventId: string | null; title: string; dueDate: string; status: "Open" | "Done"; priority?: Priority; completedAt?: string; updatedAt?: string };
+export type PlannerEvent = { ownerId?: string; completed?: boolean; id: string; ideaId: string | null; todoId: string | null; title: string; scheduledDate: string; scheduledTime: string | null; priority?: Priority; origin?: CalendarOrigin };
+export type PlannerTodo = { ownerId?: string; originConversationId?: string; id: string; ideaId: string | null; eventId: string | null; title: string; dueDate: string; status: "Open" | "Done"; priority?: Priority; completedAt?: string; updatedAt?: string };
 export type PlannerData = { events: PlannerEvent[]; todos: PlannerTodo[] };
 type Read<T> = { data: T; incomplete: boolean };
 export type WorkspaceRecords = { ideas: Read<IdeaRecord[]>; planner: Read<PlannerData> };
@@ -46,14 +46,14 @@ function readEvent(value: unknown): PlannerEvent | null {
   const time = value.scheduledTime;
   if (!scheduledDate || (time != null && (typeof time !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)))) return null;
   const origin = value.origin === "calendar" || value.origin === "task-deadline" ? value.origin : undefined;
-  return { id: value.id, title: value.title, scheduledDate, scheduledTime: typeof time === "string" ? time : null, todoId: optionalText(value.todoId) ?? null, ideaId: optionalText(value.ideaId) ?? null, priority: priority(value.priority), origin };
+  return { ownerId: optionalText(value.ownerId), completed: typeof value.completed === "boolean" ? value.completed : undefined, id: value.id, title: value.title, scheduledDate, scheduledTime: typeof time === "string" ? time : null, todoId: optionalText(value.todoId) ?? null, ideaId: optionalText(value.ideaId) ?? null, priority: priority(value.priority), origin };
 }
 
 function readTodo(value: unknown): PlannerTodo | null {
   if (!isObject(value) || typeof value.id !== "string" || !value.id || typeof value.title !== "string" || (value.status !== "Open" && value.status !== "Done")) return null;
   const dueDate = dateKey(value.dueDate);
   if (value.dueDate && !dueDate) return null;
-  return { id: value.id, title: value.title, dueDate, status: value.status, eventId: optionalText(value.eventId) ?? null, ideaId: optionalText(value.ideaId) ?? null, priority: priority(value.priority), completedAt: optionalText(value.completedAt), updatedAt: optionalText(value.updatedAt) };
+  return { ownerId: optionalText(value.ownerId), originConversationId: optionalText(value.originConversationId), id: value.id, title: value.title, dueDate, status: value.status, eventId: optionalText(value.eventId) ?? null, ideaId: optionalText(value.ideaId) ?? null, priority: priority(value.priority), completedAt: optionalText(value.completedAt), updatedAt: optionalText(value.updatedAt) };
 }
 
 function readRows<T extends { id: string }>(value: unknown, read: (row: unknown) => T | null): Read<T[]> {

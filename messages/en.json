@@ -72,6 +72,7 @@
       "dueToday": "To-dos due today",
       "important": "Important events today",
       "dueSoon": "Next three days",
+      "overdueTasks": "Overdue tasks",
       "followUps": "Smart follow-up"
     },
     "sources": { "todos": "To-do", "calendar": "Calendar", "inbox": "Idea Box" },

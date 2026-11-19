@@ -4,15 +4,19 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { defaultLocale } from "../../i18n/config";
-import { ArrowRight, ArrowUpRight, BookOpen, CalendarDays, Check, ChevronDown, Circle, Compass, Lightbulb, ListTodo, MessageSquare, Search, Sparkles, Target, TrendingUp, X } from "lucide-react";
+import { ArrowRight, ArrowUpRight, BookOpen, CalendarDays, Check, ChevronDown, Circle, Compass, Lightbulb, ListTodo, MessageSquare, Search, Sparkles, TrendingUp, X } from "lucide-react";
 import SiteNavigation from "../SiteNavigation";
 import MarkdownContent from "../partners/MarkdownContent";
 import type { AIConversation, ConversationListItem } from "../../lib/ai/conversations";
 import { PARTNER_ROLE_ID, type PartnerRole } from "../../lib/ai/contracts";
 import "./workspace.css";
 import WorkspaceCoach from "./WorkspaceCoach";
-import DailyCheckIn from "./DailyCheckIn";
+import DailyBriefing from "./DailyBriefing";
 import WeeklyReview from "./WeeklyReview";
+import ProactiveInsights from "./ProactiveInsights";
+import { WorkflowConnect } from "./WorkflowConnection";
+import { useWorkspaceAccount } from "./useWorkspaceAccount";
+import type { WorkflowCoachRequest, WorkflowConversationLink } from "../../lib/proactive/coach";
 import { emptyIdeas, emptyPlanner, IDEA_KEY, localDateKey, PLANNER_KEY, readWorkspaceRecords, toggleStoredTodo, type IdeaRecord, type IdeaStatus, type PlannerTodo, type WorkspaceRecords } from "../../lib/workspace/browser-records";
 
 type WorkspaceTab = "Overview" | "Ideas" | "Actions" | "Outcomes" | "Conversations";
@@ -55,6 +59,17 @@ function formatDateOnly(value: string) {
 function ideaStatus(idea: IdeaRecord): IdeaStatus { return idea.status ?? "Saved"; }
 
 export default function WorkspacePage() {
+  const account = useWorkspaceAccount();
+  const ownerId = account.status === "ready" ? account.userId : null;
+  const [coachRequest, setCoachRequest] = useState<WorkflowCoachRequest | undefined>();
+  const workflowRequest = coachRequest?.ownerId === ownerId ? coachRequest : undefined;
+  const [conversationLink, setConversationLink] = useState<WorkflowConversationLink | null>(null);
+  useEffect(() => {
+    if (account.status !== "ready") { setCoachRequest(undefined); setConversationLink(null); }
+  }, [account.status, ownerId]);
+  useEffect(() => {
+    if (workflowRequest) document.getElementById("workspace-coach-title")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [workflowRequest]);
   const tReview = useTranslations("weeklyReview");
   const [records, setRecords] = useState<WorkspaceRecords | null>(null);
   const ready = records !== null;
@@ -136,6 +151,7 @@ export default function WorkspacePage() {
     const candidates = inProgressIdeas.length > 0 ? inProgressIdeas : ideas.filter(idea => ideaStatus(idea) === "Saved");
     return [...candidates].sort((a, b) => (b.progressUpdatedAt ?? b.updatedAt ?? b.createdAt).localeCompare(a.progressUpdatedAt ?? a.updatedAt ?? a.createdAt)).slice(0, 5);
   }, [ideas, inProgressIdeas]);
+  const completedCount = completedTasks.length + ideas.filter(idea => ideaStatus(idea) === "Done").length;
   const outcomes = useMemo(() => ideas.filter(idea => ideaStatus(idea) === "Done" || idea.progressUpdatedAt).sort((a, b) => (b.progressUpdatedAt ?? b.updatedAt ?? b.createdAt).localeCompare(a.progressUpdatedAt ?? a.updatedAt ?? a.createdAt)), [ideas]);
   const filteredIdeas = useMemo(() => ideas.filter(idea => (ideaFilter === "All" || ideaStatus(idea) === ideaFilter) && idea.text.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())).sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [ideas, ideaFilter, search]);
   async function openConversation(conversationId: string) {
@@ -302,7 +318,16 @@ export default function WorkspacePage() {
       <Link className="workspace-brand" href="/" aria-label="AIASK home"><span className="workspace-brand-mark"><Sparkles size={16} /></span><span>aiask<span>.</span></span></Link>
       <div className="workspace-rail-label">YOUR SPACE</div>
       <nav aria-label="Workspace sections" className="workspace-rail-nav">
-        {tabs.map(({ label, icon: Icon }) => <button key={label} type="button" className={tab === label ? "workspace-rail-link active" : "workspace-rail-link"} onClick={() => setTab(label)} aria-current={tab === label ? "page" : undefined}><Icon size={16} /><span>{label}</span>{label === "Ideas" && ready && <small>{ideas.length}</small>}{label === "Actions" && ready && <small>{openTasks.length}</small>}{label === "Conversations" && conversationStatus === "ready" && <small>{conversations.length}</small>}</button>)}
+        {tabs.map(({ label, icon: Icon }) => <button key={label} type="button" className={tab === label ? "workspace-rail-link active" : "workspace-rail-link"} onClick={() => setTab(label)} aria-current={tab === label ? "page" : undefined}>
+          <Icon size={16} /><span>{label}</span>
+          {ready && label === "Ideas" && <span className="workspace-rail-counts"><small className="workspace-rail-count" aria-label={`Saved thoughts: ${ideas.length}`} title={`Saved thoughts: ${ideas.length}`}>{ideas.length}</small></span>}
+          {ready && label === "Actions" && <span className="workspace-rail-counts">
+            <small className="workspace-rail-count" aria-label={`Open actions: ${openTasks.length}`} title={`Open actions: ${openTasks.length}`}>{openTasks.length}</small>
+            <small className="workspace-rail-count workspace-rail-count--secondary" aria-label={`In motion: ${inProgressIdeas.length}`} title={`In motion: ${inProgressIdeas.length}`}>{inProgressIdeas.length}</small>
+          </span>}
+          {ready && label === "Outcomes" && <span className="workspace-rail-counts"><small className="workspace-rail-count" aria-label={`Completed: ${completedCount}`} title={`Completed: ${completedCount}`}>{completedCount}</small></span>}
+          {label === "Conversations" && conversationStatus === "ready" && <span className="workspace-rail-counts"><small className="workspace-rail-count" aria-label={`Conversations: ${conversations.length}`} title={`Conversations: ${conversations.length}`}>{conversations.length}</small></span>}
+        </button>)}
       </nav>
       <div className="workspace-rail-bottom"><div className="workspace-rail-note"><span><Sparkles size={14} /></span><p>A flexible space for thoughts at every stage.</p></div><Link href="/" className="workspace-back-link">Back to AIASK <ArrowUpRight size={14} /></Link></div>
     </aside>
@@ -319,14 +344,8 @@ export default function WorkspacePage() {
         {error && <p className="workspace-error" role="alert">{error}</p>}
         {!ready ? <div className="workspace-loading"><span className="workspace-loading-dot" /> Gathering your thoughts and plans…</div> : <>
           {tab === "Overview" && <>
-            {records && <DailyCheckIn records={records} />}
-            <section className="workspace-stats" aria-label="Workspace summary">
-              <article><span className="stat-icon ideas-stat"><Lightbulb size={16} /></span><p>Saved thoughts</p><strong>{ideas.length}</strong><small>Ideas, questions, and possibilities</small></article>
-              <article><span className="stat-icon active-stat"><Target size={16} /></span><p>In motion</p><strong>{inProgressIdeas.length}</strong><small>Thoughts with an active next step</small></article>
-              <article><span className="stat-icon action-stat"><ListTodo size={16} /></span><p>Open actions</p><strong>{openTasks.length}</strong><small>Across your plans and to-dos</small></article>
-              <article><span className="stat-icon done-stat"><Check size={16} /></span><p>Completed</p><strong>{completedTasks.length + ideas.filter(idea => ideaStatus(idea) === "Done").length}</strong><small>Actions and ideas marked done</small></article>
-            </section>
-
+      {records && <DailyBriefing records={records} />}
+      <ProactiveInsights account={account} onDiscuss={setCoachRequest} conversationLink={conversationLink} />
             <div className="workspace-overview-grid">
               <section className="workspace-panel motion-panel">
                 <div className="workspace-panel-heading">
@@ -376,14 +395,18 @@ export default function WorkspacePage() {
               </section>
 
               <section className="workspace-panel workspace-calendar-panel"><div className="workspace-panel-heading"><div><span className="panel-kicker">MAKING ROOM</span><h2>Coming up</h2></div><CalendarDays size={16} /></div>
-                {upcomingEvents.length === 0 ? <p className="workspace-panel-empty">No calendar plans ahead. Keep your schedule open until something needs a time.</p> : <div className="coming-list">{upcomingEvents.slice(0, 4).map(event => <div className="coming-event" key={event.id}><time>{formatEventDate(event.scheduledDate)}</time><div><b>{event.title}</b><small>{event.scheduledTime ?? "Any time"}{event.ideaId && ideas.find(idea => idea.id === event.ideaId) ? ` · ${ideas.find(idea => idea.id === event.ideaId)?.text}` : ""}</small></div></div>)}</div>}
+                {upcomingEvents.length === 0 ? <p className="workspace-panel-empty">No calendar plans ahead. Keep your schedule open until something needs a time.</p> : <div className="coming-list">{upcomingEvents.slice(0, 4).map(event => <div className="coming-event" key={event.id}><time>{formatEventDate(event.scheduledDate)}</time><div><b>{event.title}</b><small>{event.scheduledTime ?? "Any time"}{event.ideaId && ideas.find(idea => idea.id === event.ideaId) ? ` · ${ideas.find(idea => idea.id === event.ideaId)?.text}` : ""}</small><WorkflowConnect type="calendar" id={event.id} /></div></div>)}</div>}
               </section>
 
               <section className="workspace-panel outcome-panel"><div className="workspace-panel-heading"><div><span className="panel-kicker">LOOKING BACK</span><h2>Progress &amp; outcomes</h2></div><button type="button" className="panel-link" onClick={() => setTab("Outcomes")}>{tReview("title")} <ArrowRight size={13} /></button></div>
                 {outcomes.length === 0 && completedTasks.length === 0 ? <p className="workspace-panel-empty">Completed work and check-ins will gather here over time. There’s no pressure to turn every thought into a finished project.</p> : <div className="outcome-list">{outcomes.slice(0, 3).map(idea => <div className="outcome-row" key={idea.id}><span className="outcome-check"><Check size={12} /></span><div><b>{idea.text}</b><small>{ideaStatus(idea) === "Done" ? "Marked complete" : "Progress check-in"}{idea.progressUpdatedAt ? ` · ${formatDate(idea.progressUpdatedAt)}` : ""}{idea.nextStep ? ` · ${idea.nextStep}` : ""}</small></div></div>)}{completedTasks.slice(0, 2).map(todo => <div className="outcome-row" key={todo.id}><span className="outcome-check"><Check size={12} /></span><div><b>{todo.title}</b><small>Action completed{todo.dueDate ? ` · Due ${formatDate(todo.dueDate)}` : ""}</small></div></div>)}</div>}
               </section>
             </div>
-            <WorkspaceCoach ideas={ideas} planner={planner} onShowHistory={() => { setConversationRoleFilter(PARTNER_ROLE_ID.actionPartner); setTab("Conversations"); }} />
+        <WorkspaceCoach key={`${account.status}:${ownerId ?? "demo"}:${workflowRequest?.requestId ?? "workspace"}`}
+          ideas={ideas} planner={planner} workflowRequest={workflowRequest} expectedUserId={ownerId ?? undefined}
+          onClearWorkflow={() => setCoachRequest(undefined)}
+          onConversationLinked={(caseId, conversationId) => { if (ownerId && workflowRequest) setConversationLink({ ownerId, caseId, conversationId, requestId: crypto.randomUUID() }); }}
+          onShowHistory={() => { setConversationRoleFilter(workflowRequest?.handoff.partnerRole ?? PARTNER_ROLE_ID.actionPartner); setTab("Conversations"); }} />
           </>}
 
           {tab === "Ideas" && <section className="workspace-list-view"><div className="list-view-heading"><div><span className="panel-kicker">YOUR IDEA BOX, WITH CONTEXT</span><h2>Ideas and intentions</h2><p>Thoughts stay connected to the plans and progress you choose to make.</p></div><Link className="workspace-add-button" href="/#top"><Lightbulb size={14} /> Capture a thought</Link></div><div className="idea-filter-bar"><div className="idea-filters" role="group" aria-label="Filter ideas">{(["All", "Saved", "In progress", "Done"] as IdeaFilter[]).map(filter => <button key={filter} type="button" className={ideaFilter === filter ? "selected" : ""} onClick={() => setIdeaFilter(filter)}>{filter}<span>{filter === "All" ? ideas.length : ideas.filter(item => ideaStatus(item) === filter).length}</span></button>)}</div><label className="workspace-search"><Search size={14} /><span className="sr-only">Search ideas</span><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Find a thought" /></label></div>
@@ -405,6 +428,7 @@ export default function WorkspacePage() {
           </section>}
         </>}
       </div>
+      <footer className="page-footer workspace-page-footer"><Link href="/about">About Us</Link></footer>
     </div>
   </main>;
 }

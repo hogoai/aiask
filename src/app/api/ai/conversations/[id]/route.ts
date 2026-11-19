@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "../../../../../lib/supabase/server";
 import { isSupabaseConfigured } from "../../../../../lib/supabase/config";
 import { formatPartnerResponse, isPartnerResponse, type ConversationMessageKind } from "../../../../../lib/ai/conversations";
-import { partnerRoleFromStoredId } from "../../../../../lib/ai/contracts";
+import { partnerRoleFromStoredId, validatePlannerChange } from "../../../../../lib/ai/contracts";
 
 export const runtime = "nodejs";
 
@@ -109,8 +109,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
   if (kind === "structured_response" && isPartnerResponse(reply.result)) {
     content = formatPartnerResponse(reply.result);
     metadata.structuredResponse = reply.result;
-  } else if (kind === "follow_up" && typeof reply.answer === "string" && reply.answer.trim().length > 0 && reply.answer.length <= 5000) {
+  } else if (kind === "follow_up" && typeof reply.answer === "string" && reply.answer.trim().length > 0 && reply.answer.length <= 20000) {
     content = reply.answer.trim();
+    if (reply.plannerChange !== undefined) {
+      const plannerChange = validatePlannerChange(reply.plannerChange);
+      if (!plannerChange) return jsonError(400, "invalid_reply", "The Planner suggestion is invalid.");
+      metadata.plannerChange = plannerChange;
+    }
   } else {
     return jsonError(400, "invalid_reply", "The saved AI response is invalid.");
   }
