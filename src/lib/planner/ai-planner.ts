@@ -177,7 +177,7 @@ export function applyPlannerChange(
       ok: true, changed: true,
       planner: {
         todos: planner.todos.filter(item => item.id !== todo.id),
-        events: todo.eventId ? planner.events.filter(event => event.id !== todo.eventId) : planner.events,
+        events: planner.events.filter(event => event.id !== todo.eventId && event.todoId !== todo.id),
       },
     };
   }
@@ -189,7 +189,7 @@ export function applyPlannerChange(
       ok: true, changed: true,
       planner: {
         events: planner.events.filter(item => item.id !== event.id),
-        todos: event.todoId ? planner.todos.filter(todo => todo.id !== event.todoId) : planner.todos,
+        todos: planner.todos.filter(todo => todo.id !== event.todoId && todo.eventId !== event.id),
       },
     };
   }
@@ -258,13 +258,13 @@ export function applyPlannerChange(
     ...(change.fields.includes("priority") ? { priority: change.priority! } : {}),
     ...(change.fields.includes("ideaId") ? { ideaId: change.ideaId } : {}),
   };
-  const nextTodos = current.todoId ? planner.todos.map(todo => todo.id === current.todoId ? {
+  const nextTodos = planner.todos.map(todo => todo.id === current.todoId || todo.eventId === current.id ? {
     ...todo,
     ...(change.fields.includes("title") ? { title: nextEvent.title } : {}),
     ...(change.fields.includes("scheduledDate") ? { dueDate: nextEvent.scheduledDate, updatedAt: now } : {}),
     ...(change.fields.includes("priority") ? { priority: nextEvent.priority } : {}),
     ...(change.fields.includes("ideaId") ? { ideaId: nextEvent.ideaId } : {}),
-  } : todo) : planner.todos;
+  } : todo);
   return {
     ok: true, changed: true,
     planner: {

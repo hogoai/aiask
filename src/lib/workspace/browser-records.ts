@@ -2,8 +2,9 @@ export const IDEA_KEY = "aiask-idea-box";
 export const PLANNER_KEY = "aiask-planner";
 
 export type IdeaStatus = "Saved" | "In progress" | "Done";
+export type NoteType = "Quick Note" | "Idea" | "Reflection" | "Action Item";
 export type Priority = "urgent" | "attention" | "onTrack";
-export type IdeaRecord = { id: string; text: string; createdAt: string; updatedAt?: string; status?: IdeaStatus; nextStep?: string; progressUpdatedAt?: string };
+export type IdeaRecord = { id: string; text: string; createdAt: string; updatedAt?: string; status?: IdeaStatus; nextStep?: string; progressUpdatedAt?: string; type?: NoteType };
 export type CalendarOrigin = "calendar" | "task-deadline";
 export type PlannerEvent = { ownerId?: string; completed?: boolean; id: string; ideaId: string | null; todoId: string | null; title: string; scheduledDate: string; scheduledTime: string | null; priority?: Priority; origin?: CalendarOrigin };
 export type PlannerTodo = { ownerId?: string; originConversationId?: string; id: string; ideaId: string | null; eventId: string | null; title: string; dueDate: string; status: "Open" | "Done"; priority?: Priority; completedAt?: string; updatedAt?: string };
@@ -13,6 +14,59 @@ export type WorkspaceRecords = { ideas: Read<IdeaRecord[]>; planner: Read<Planne
 
 export const emptyPlanner: PlannerData = { events: [], todos: [] };
 export const emptyIdeas: IdeaRecord[] = [];
+
+export function synchronizePlannerData<TEvent extends PlannerEvent, TTodo extends PlannerTodo>(
+  planner: { events: TEvent[]; todos: TTodo[] },
+): { events: TEvent[]; todos: TTodo[] } {
+  const todoIds = new Set(planner.todos.map(todo => todo.id));
+  const events = planner.events.map(event => event.todoId && !todoIds.has(event.todoId)
+    ? { ...event, todoId: null } as TEvent
+    : { ...event });
+  const linkedEventIds = new Set<string>();
+  const todos = planner.todos.map(todo => {
+    const eventIndex = todo.eventId
+      ? events.findIndex(event => event.id === todo.eventId && (!event.todoId || event.todoId === todo.id))
+      : -1;
+    const linkedIndex = eventIndex >= 0 ? eventIndex : events.findIndex(event => event.todoId === todo.id);
+    if (linkedIndex < 0) return todo.eventId ? { ...todo, eventId: null } as TTodo : todo;
+
+    const event = events[linkedIndex];
+    if (event.origin === "task-deadline" && !todo.dueDate) {
+      events.splice(linkedIndex, 1);
+      return { ...todo, eventId: null } as TTodo;
+    }
+
+    const dueDate = event.origin === "calendar" ? event.scheduledDate : todo.dueDate || event.scheduledDate;
+    const priority = todo.priority ?? event.priority;
+    const ideaId = todo.ideaId ?? event.ideaId;
+    const nextTodo = { ...todo, eventId: event.id, dueDate, priority, ideaId } as TTodo;
+    events[linkedIndex] = {
+      ...event,
+      todoId: todo.id,
+      title: todo.title,
+      scheduledDate: dueDate,
+      scheduledTime: event.origin === "task-deadline" ? null : event.scheduledTime,
+      priority,
+      ideaId,
+      completed: todo.status === "Done",
+      ...( "description" in event ? { description: todo.title } : {}),
+    } as TEvent;
+    linkedEventIds.add(event.id);
+    events.forEach((candidate, index) => {
+      if (candidate.todoId === todo.id && candidate.id !== event.id) {
+        events[index] = { ...candidate, todoId: null } as TEvent;
+      }
+    });
+    return nextTodo;
+  });
+
+  return {
+    events: events.map(event => event.todoId && !linkedEventIds.has(event.id)
+      ? { ...event, todoId: null } as TEvent
+      : event),
+    todos,
+  };
+}
 
 export function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -33,11 +87,12 @@ function priority(value: unknown): Priority | undefined {
 }
 
 function readIdea(value: unknown): IdeaRecord | null {
-  if (!isObject(value) || typeof value.id !== "string" || !value.id || typeof value.text !== "string" || typeof value.createdAt !== "string") return null;
+  if (!isObject(value) || typeof value.id !== "string" || !value.id || typeof value.text !== "string" || typeof value.createdAt !== "string" || !Number.isFinite(Date.parse(value.createdAt))) return null;
   const { id, text, createdAt, status } = value;
   if (status !== undefined && status !== "Saved" && status !== "In progress" && status !== "Done") return null;
   if ([value.updatedAt, value.nextStep, value.progressUpdatedAt].some(field => field != null && typeof field !== "string")) return null;
-  return { id, text, createdAt, status, updatedAt: optionalText(value.updatedAt), nextStep: optionalText(value.nextStep), progressUpdatedAt: optionalText(value.progressUpdatedAt) };
+  const type = value.type === "Quick Note" || value.type === "Idea" || value.type === "Reflection" || value.type === "Action Item" ? value.type : undefined;
+  return { ...value, id, text, createdAt, status, updatedAt: optionalText(value.updatedAt), nextStep: optionalText(value.nextStep), progressUpdatedAt: optionalText(value.progressUpdatedAt), type } as IdeaRecord;
 }
 
 function readEvent(value: unknown): PlannerEvent | null {
@@ -103,6 +158,9 @@ export function toggleStoredTodo(storage: Pick<Storage, "getItem" | "setItem">, 
   const isDone = row.status === "Done";
   const now = new Date().toISOString();
   const todos = parsed.todos.map(item => item === row ? { ...row, status: isDone ? "Open" : "Done", completedAt: isDone ? undefined : now, updatedAt: now } : item);
-  storage.setItem(PLANNER_KEY, JSON.stringify({ ...parsed, todos }));
+  const events = parsed.events.map(item => isObject(item) && (item.todoId === id || item.id === row.eventId)
+    ? { ...item, completed: !isDone }
+    : item);
+  storage.setItem(PLANNER_KEY, JSON.stringify({ ...parsed, events, todos }));
   return true;
 }

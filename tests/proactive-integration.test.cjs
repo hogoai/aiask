@@ -292,22 +292,31 @@ test("Snooze and Dismiss survive refresh; only an explicit reviewed restart reop
   view = await connect(controller);
   assert.equal(first(view).workflowStatus, "dismissed");
   view = await connect(controller, "quotation", true);
-  assert.equal(first(view).workflowStatus, "waiting_for_answer");
+  assert.equal(first(view).workflowStatus, "pending");
   assert.equal(view.state.cases.length, 1);
   assert.ok(first(view).memory.history.some(entry => entry.event === "user_restarted_after_source_review"));
+  setTime("2026-11-20T09:00:00.000Z");
+  await controller.refresh(view.token);
+  assert.equal(first(controller.snapshot()).workflowStatus, "waiting_for_answer");
 });
 
-test("changed sources free visible capacity while other reviewed tasks keep moving", async () => {
+test("source edits invalidate a question and another reviewed task waits until the next day", async () => {
   const storage = memoryStorage([task("first"), task("second")]);
-  const { controller } = setup(storage);
+  const { controller, setTime } = setup(storage);
   let view = await connect(controller, "first");
   view = await connect(controller, "second");
   assert.equal(view.insights.length, 1);
   editPlanner(storage, { title: "Needs a fresh review" });
   await controller.refresh(view.token);
   view = controller.snapshot();
+  assert.equal(view.insights.length, 0);
+  assert.deepEqual(view.state.cases.map(item => item.workflowStatus), ["pending", "pending"]);
+  setTime("2026-11-19T09:00:00.000Z");
+  await controller.refresh(view.token);
+  view = controller.snapshot();
   assert.equal(view.insights.length, 1);
   assert.equal(view.insights[0].sourceId, "second");
+  assert.deepEqual(view.state.cases.map(item => item.workflowStatus), ["pending", "waiting_for_answer"]);
 });
 
 test("accounts, stale review tokens and A -> B -> A transitions isolate all new workflow data", async () => {

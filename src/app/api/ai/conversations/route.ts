@@ -32,11 +32,25 @@ export async function GET(request: NextRequest) {
   const rawRole = params.get("partnerRole");
   const role = rawRole ? normalizePartnerRole(rawRole) : null;
   if (rawRole && !role) return jsonError(400, "invalid_partner", "Choose a supported AI Team role.");
+  const ideaId = params.get("ideaId");
+  if (ideaId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(ideaId)) {
+    return jsonError(400, "invalid_note_reference", "Choose a valid saved note.");
+  }
+  const notesContext = params.get("notesContext");
+  const supportedNotesContext = notesContext && (
+    /^AIASK context scope: selected-note-[0-9a-f-]{1,120}$/i.test(notesContext)
+    || /^AIASK context scope: current-view-[a-z0-9_-]{1,120}$/i.test(notesContext)
+    || notesContext === "AIASK context scope: authorized personal Workspace Notes."
+  );
+  if (notesContext && (!supportedNotesContext || notesContext.length > 180)) {
+    return jsonError(400, "invalid_notes_context", "Choose a valid Notes & Ideas conversation context.");
+  }
   const storedRole = role ? partnerRoleToStoredId(role) : null;
   const select = "id,title,idea_id,project_id,partner_role,is_favorite,created_at,updated_at";
   const makeQuery = () => {
     let builder = supabase.from("ai_conversations").select(select).eq("user_id", userId);
     if (storedRole) builder = builder.eq("partner_role", storedRole);
+    if (ideaId) builder = builder.eq("idea_id", ideaId);
     return builder;
   };
 
@@ -62,6 +76,17 @@ export async function GET(request: NextRequest) {
         if (result.error) throw result.error;
         rows = result.data ?? [];
       }
+    }
+
+    if (notesContext && rows.length > 0) {
+      const { data: markers, error: markerError } = await supabase.from("ai_conversation_messages")
+        .select("conversation_id,content")
+        .eq("user_id", userId)
+        .eq("kind", "idea")
+        .in("conversation_id", rows.map(row => row.id));
+      if (markerError) throw markerError;
+      const matchingIds = new Set((markers ?? []).filter(message => message.content === notesContext).map(message => message.conversation_id as string));
+      rows = rows.filter(row => matchingIds.has(row.id as string));
     }
 
     const conversations = rows.map(row => {

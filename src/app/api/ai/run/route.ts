@@ -6,6 +6,8 @@ import { isAppLocale } from "../../../../i18n/config";
 import { isObject } from "../../../../lib/workspace/browser-records";
 import { isDailyQuestionKind } from "../../../../lib/workspace/daily-question";
 import { parseWeeklyCoachFacts } from "../../../../lib/workspace/weekly-coach";
+import { getAuthorizedWorkspaceIdeas, MAX_AUTHORIZED_WORKSPACE_IDEAS } from "../../../../lib/workspace/authorized-ideas";
+import { WorkspaceResolutionError } from "../../../../lib/workspace/server";
 import { formatPartnerResponse, titleFromIdea } from "../../../../lib/ai/conversations";
 import {
   PARTNER_ROLE_ID,
@@ -14,7 +16,10 @@ import {
   partnerRoleToStoredId,
   validateAIASKOutput,
   type PartnerFollowUpMessage,
+  type NotesChatAction,
   type PartnerRole,
+  validateNotesChatActions,
+  verifiedNotesContextNoteIds,
 } from "../../../../lib/ai/contracts";
 
 export const runtime = "nodejs";
@@ -23,6 +28,7 @@ const MAX_REQUEST_BYTES = 72 * 1024;
 const RATE_LIMIT_COUNT = 60;
 const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 const requestsByUser = new Map<string, number[]>();
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function requestLimitForAccount(email: string | undefined) {
   if (!email) return RATE_LIMIT_COUNT;
@@ -88,6 +94,16 @@ function consumeRateLimit(userId: string, requestLimit: number) {
 
 function isMissingConversationSchema(error: { code?: string; message?: string } | null) {
   return Boolean(error && (error.code === "42P01" || error.code === "PGRST205" || error.message?.includes("ai_conversation")));
+}
+
+function noteIdsInContext(value: string) {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!isObject(parsed) || !Array.isArray(parsed.records)) return new Set<string>();
+    return new Set(parsed.records.flatMap(record => isObject(record) && typeof record.id === "string" ? [record.id] : []));
+  } catch {
+    return new Set<string>();
+  }
 }
 
 async function setUserMessageStatus(supabase: Awaited<ReturnType<typeof createClient>>, userId: string, messageId: string, status: "pending" | "completed" | "failed" | "save_failed") {
@@ -214,9 +230,53 @@ export async function POST(request: NextRequest) {
   const runRequest = parsedRequest.data;
   const followUp = runRequest.kind === "follow_up" ? runRequest : null;
   const livePartnerId: PartnerRole | null = runRequest.kind === "structured" ? runRequest.input.partnerRole : null;
-  const idea = followUp?.originalIdea ?? runRequest.input.userMessage;
+  let idea = followUp?.originalIdea ?? runRequest.input.userMessage;
+  let notesContextMarker: string | null = followUp?.notesContextKey
+    ? `AIASK context scope: ${followUp.notesContextKey}`
+    : null;
+  if (followUp?.workspaceNotesScope) {
+    if (runRequest.input.context?.ideaId) {
+      return jsonError(400, "invalid_workspace_scope", "Workspace Notes cannot be combined with a selected Note reference.");
+    }
+    try {
+      const authorized = await getAuthorizedWorkspaceIdeas();
+      if (!authorized.complete) {
+        return jsonError(413, "workspace_context_too_large", `This Workspace has more than ${MAX_AUTHORIZED_WORKSPACE_IDEAS} notes. Choose Current View or Selected Note.`);
+      }
+      const perspectiveContext = JSON.stringify({
+        scope: "Authorized Workspace Notes",
+        source: `Server-verified notes from the current personal Workspace: ${authorized.workspace.name}`,
+        recordCount: authorized.notes.length,
+        records: authorized.notes,
+      });
+      if (perspectiveContext.length > 8000) {
+        return jsonError(413, "workspace_context_too_large", "These Workspace Notes exceed the AI context limit. Choose Current View or Selected Note, or shorten the saved notes.");
+      }
+      idea = `Authorized Workspace Notes (${authorized.notes.length} records)`;
+      followUp.originalIdea = idea;
+      followUp.perspectiveContext = perspectiveContext;
+      notesContextMarker = "AIASK context scope: authorized personal Workspace Notes.";
+    } catch (error) {
+      if (error instanceof WorkspaceResolutionError) {
+        const status = error.code === "sign_in_required" ? 401 : 503;
+        return jsonError(status, error.code, error.message);
+      }
+      const dbError = error as { code?: string };
+      console.error("ai.workspace_notes.context.failed", { userId, code: dbError.code ?? null });
+      return jsonError(503, "workspace_context_unavailable", "Authorized Workspace Notes could not be verified, so no note context was sent to the model.");
+    }
+  }
+  if (followUp?.notesChat && !followUp.workspaceNotesScope
+    && (!followUp.notesContextKey || !verifiedNotesContextNoteIds(followUp.perspectiveContext, followUp.notesContextKey))) {
+    return jsonError(400, "invalid_notes_context", "The selected note or visible Notes & Ideas view could not be verified. Reload the view and try again.");
+  }
   const requestRole = runRequest.input.partnerRole;
+  const notesContextNoteIds = followUp?.notesChat
+    ? [...noteIdsInContext(followUp.perspectiveContext)].slice(0, MAX_AUTHORIZED_WORKSPACE_IDEAS)
+    : [];
   const requestedConversationId = runRequest.input.conversationId ?? null;
+  const requestedIdeaId = runRequest.input.context?.ideaId ?? null;
+  const linkedIdeaId = requestedIdeaId && UUID_PATTERN.test(requestedIdeaId) ? requestedIdeaId : null;
   const retryMessageId = runRequest.retryMessageId ?? null;
 
   let conversationId = requestedConversationId;
@@ -226,19 +286,36 @@ export async function POST(request: NextRequest) {
   try {
     if (conversationId) {
       const { data: conversation, error } = await (await createClient()).from("ai_conversations")
-        .select("id,partner_role")
+        .select("id,partner_role,idea_id")
         .eq("id", conversationId)
         .eq("user_id", userId)
         .maybeSingle();
       if (error) throw error;
       if (!conversation) return jsonError(404, "conversation_not_found", "This conversation could not be found.");
       if (partnerRoleFromStoredId(conversation.partner_role) !== requestRole) return jsonError(409, "conversation_partner_mismatch", "This conversation belongs to a different AI Team role.");
+      if (linkedIdeaId && conversation.idea_id !== linkedIdeaId) return jsonError(409, "conversation_note_mismatch", "This conversation belongs to a different note. Start a new AI Team chat for this note.");
+      if (notesContextMarker) {
+        const { data: scopeMessage, error: scopeError } = await (await createClient()).from("ai_conversation_messages")
+          .select("content")
+          .eq("conversation_id", conversationId)
+          .eq("user_id", userId)
+          .eq("kind", "idea")
+          .order("created_at", { ascending: true })
+          .limit(1)
+          .maybeSingle();
+        if (scopeError) throw scopeError;
+        const legacySelectedNote = Boolean(linkedIdeaId && conversation.idea_id === linkedIdeaId && followUp?.notesContextKey?.startsWith("selected-note-"));
+        if (scopeMessage?.content !== notesContextMarker && !legacySelectedNote) {
+          return jsonError(409, "conversation_context_mismatch", "This conversation was started with a different context scope. Start a new AI Team chat for Workspace Notes.");
+        }
+      }
     } else {
       const supabase = await createClient();
       const { data: conversation, error } = await supabase.from("ai_conversations").insert({
         user_id: userId,
         title: titleFromIdea(idea),
         partner_role: partnerRoleToStoredId(requestRole),
+        ...(linkedIdeaId ? { idea_id: linkedIdeaId } : {}),
       }).select("id").single();
       if (error) throw error;
       conversationId = conversation.id;
@@ -266,9 +343,13 @@ export async function POST(request: NextRequest) {
           conversation_id: conversationId,
           user_id: userId,
           role: "user",
-          content: idea,
+          content: notesContextMarker ?? idea,
           kind: "idea",
           status: "completed",
+          ...(followUp.notesChat ? { metadata: { notesContext: {
+            scope: followUp.workspaceNotesScope ? "authorized-workspace-notes" : followUp.notesContextKey?.startsWith("selected-note-") ? "selected-note" : "current-view",
+            noteIds: notesContextNoteIds,
+          } } } : {}),
         });
         if (ideaError) throw ideaError;
       }
@@ -313,7 +394,7 @@ export async function POST(request: NextRequest) {
   try {
     if (followUp) {
       const { data: storedMessages, error: historyError } = await supabase.from("ai_conversation_messages")
-        .select("role,content,status")
+        .select("role,content,status,kind")
         .eq("conversation_id", conversationId)
         .eq("user_id", userId)
         .in("status", ["completed", "pending"])
@@ -321,6 +402,7 @@ export async function POST(request: NextRequest) {
         .limit(8);
       if (historyError) throw historyError;
       const storedHistory: PartnerFollowUpMessage[] = (storedMessages ?? [])
+        .filter(message => message.kind !== "idea")
         .reverse()
         .map(message => ({ role: message.role as "user" | "assistant", content: message.content }));
       const completion = await runPartnerFollowUpWithOpenAI(
@@ -329,13 +411,20 @@ export async function POST(request: NextRequest) {
         followUp.perspectiveContext,
         storedHistory,
         followUp.plannerChat === true,
+        followUp.notesChat === true,
       );
+      const allowedNoteIds = noteIdsInContext(followUp.perspectiveContext);
+      const notesActions: NotesChatAction[] | null = followUp.notesChat
+        ? validateNotesChatActions(completion.notesActions, allowedNoteIds)
+        : null;
+      if (followUp.notesChat && !notesActions) throw new AIProviderError("The model provider returned an invalid Notes chat response.");
       const outputCandidate = {
         partnerRole: requestRole,
         role: requestRole,
         response: { summary: completion.answer.slice(0, 5000), content: completion.answer },
         answer: completion.answer,
         ...(followUp.plannerChat && completion.plannerChange ? { plannerChange: completion.plannerChange } : {}),
+        ...(followUp.notesChat ? { suggestions: notesActions ?? [] } : {}),
         usage: completion.usage,
         model: completion.model,
         conversationId,
@@ -354,6 +443,7 @@ export async function POST(request: NextRequest) {
           model: completion.model,
           usage: completion.usage,
           ...(followUp.plannerChat && completion.plannerChange ? { plannerChange: completion.plannerChange } : {}),
+          ...(followUp.notesChat ? { notesActions: notesActions ?? [] } : {}),
         },
       );
       console.info(`ai.request.completed ${JSON.stringify({
@@ -412,16 +502,51 @@ export async function POST(request: NextRequest) {
       return jsonError(503, "ai_not_configured", "The server DeepSeek API key is missing. Add DEEPSEEK_API_KEY to .env.local and restart the server.", undefined, retryDetails);
     }
     if (error instanceof AIProviderError) {
-      console.warn(`ai.request.failed role=${requestRole} providerStatus=${error.status ?? "unknown"} durationMs=${elapsed}`);
+      console.warn(`ai.request.failed ${JSON.stringify({
+        role: requestRole,
+        providerStatus: error.status ?? null,
+        providerReason: error.providerReason ?? null,
+        providerDiagnostics: error.providerDiagnostics ?? null,
+        providerFailure: error.message.slice(0, 180),
+        durationMs: elapsed,
+      })}`);
       if (error.status === 504) return jsonError(504, "ai_timeout", "The AI request took too long. Your question was saved and can be retried.", undefined, retryDetails);
       if (error.status === 429) return jsonError(503, "provider_busy", "The AI provider is busy or has reached its usage limit. Your question was saved and can be retried.", undefined, retryDetails);
       if (error.status === 401) return jsonError(502, "provider_auth_failed", "The model provider rejected the configured key. Your question was saved and can be retried after checking the provider settings.", undefined, retryDetails);
       if (error.status === 402) return jsonError(503, "provider_balance_required", "The model provider account may need balance or quota. Your question was saved and can be retried later.", undefined, retryDetails);
       if (error.status === 400) return jsonError(502, "provider_request_invalid", "The model provider rejected this request. Your question was saved; check whether the selected model supports the Responses API.", undefined, retryDetails);
       if (error.status === 404) return jsonError(502, "model_unavailable", "This model is not available on the selected API endpoint. Your question was saved and can be retried with a supported model.", undefined, retryDetails);
-      if (error.status === 422) return jsonError(502, "provider_response_incomplete", "DeepSeek stopped before returning a complete answer. Your question was saved and can be retried.", undefined, retryDetails);
+      if (error.status === 422 && error.providerDiagnostics?.responseStatus === "incomplete") {
+        if (error.providerReason === "max_output_tokens") {
+          return jsonError(502, "provider_output_limit", "DeepSeek reached its answer-length limit before finishing. Try asking for a shorter answer or narrowing the records, then retry.", undefined, retryDetails);
+        }
+        if (error.providerReason === "content_filter") {
+          return jsonError(502, "provider_content_filter", "DeepSeek's content filter stopped this response. Rephrase the question or ask about fewer records, then retry.", undefined, retryDetails);
+        }
+        const reason = error.providerReason && /^[a-z0-9_-]{1,64}$/i.test(error.providerReason)
+          ? ` (provider reason: ${error.providerReason})`
+          : " (provider reason not reported)";
+        return jsonError(502, "provider_response_incomplete", `DeepSeek returned an incomplete response${reason}. Your question was saved and can be retried.`, undefined, retryDetails);
+      }
+      if (error.status === 422) {
+        const code = error.providerDiagnostics?.providerHttpError?.code;
+        const codeSuffix = code && /^[a-z0-9_-]{1,64}$/i.test(code) ? ` (${code})` : "";
+        return jsonError(502, "provider_request_invalid", `DeepSeek rejected this request${codeSuffix}. The request format was recorded for diagnosis; your question was saved.`, undefined, retryDetails);
+      }
       if (error.status === 500 || error.status === 503) return jsonError(503, "provider_unavailable", "DeepSeek is temporarily unavailable. Your question was saved and can be retried shortly.", undefined, retryDetails);
       if (error.status === 403) return jsonError(502, "provider_access_denied", "DeepSeek denied this request. Check the API key and account access, then retry.", undefined, retryDetails);
+      const outputErrors: Record<string, string> = {
+        "The model provider could not be reached.": "DeepSeek could not be reached. Your question was saved and can be retried.",
+        "The model provider returned invalid planner JSON.": "DeepSeek responded, but the Planner answer was not valid JSON. Your question was saved and can be retried.",
+        "The model provider returned invalid Notes chat JSON.": "DeepSeek responded, but the Notes & Ideas answer was not valid JSON. Your question was saved and can be retried.",
+        "The model provider returned no Notes chat response.": "DeepSeek returned no Notes & Ideas answer. Your question was saved and can be retried.",
+        "The model provider returned an invalid Notes chat response.": "DeepSeek's Notes & Ideas answer did not match the required format. Your question was saved and can be retried.",
+        "The model provider returned no planner response.": "DeepSeek responded without the required Planner answer. Your question was saved and can be retried.",
+        "The model provider returned an invalid planner response.": "DeepSeek responded, but its Planner answer did not match the required format. Your question was saved and can be retried.",
+        "The model provider returned no follow-up text.": "DeepSeek returned an empty answer. Your question was saved and can be retried.",
+      };
+      const outputError = outputErrors[error.message];
+      if (outputError) return jsonError(502, "provider_output_invalid", outputError, undefined, retryDetails);
       return jsonError(502, "ai_request_failed", "The AI Team role could not complete this request. Your question was saved and can be retried.", undefined, retryDetails);
     }
     console.error("ai.request.failed", { userId, role: requestRole, status: "unexpected_error", durationMs: elapsed });

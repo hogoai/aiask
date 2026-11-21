@@ -189,9 +189,14 @@ test("source edits invalidate an outstanding question and reject its delayed ans
   assert.equal(item(next).triggerType, "source_updated");
   assert.equal(item(next).assignedRoleId, "evaluator");
   assert.ok(item(next).memory.questions[0].invalidatedAt);
-  assert.match(item(next).currentQuestion.text, /updated/);
+  assert.equal(item(next).currentQuestion, null);
+  assert.equal(item(next).workflowStatus, "pending");
   assert.throws(() => change(next, { type: "answer", questionId: oldQuestion, text: "Yes" }), /stale_answer/);
   assert.equal(advanceWorkflows(next, [edited], start), next);
+  const tomorrow = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  const reasked = advanceWorkflows(next, [edited], tomorrow);
+  assert.equal(item(reasked).workflowStatus, "waiting_for_answer");
+  assert.match(item(reasked).currentQuestion.text, /updated/);
   const reverted = advanceWorkflows(next, [observation()], start);
   assert.equal(item(reverted).sourceVersion, 3);
 });
@@ -249,18 +254,23 @@ test("disabled prompts generate no new Cases and resume existing questions witho
   assert.equal(selectProactiveInsights(enabled)[0].question.id, item(first).currentQuestion.id);
 });
 
-test("visible question limits queue other sources and never ask every partner", () => {
+test("at most one new question is asked per day while other sources stay queued", () => {
   const sources = ["a", "b", "c", "d"].map(id => observation(id));
   let state = advanceWorkflows(setWorkflowSettings(fresh(), { maxVisibleQuestions: 2 }), sources, start);
   assert.equal(state.cases.length, 4);
-  assert.equal(selectProactiveInsights(state).length, 2);
-  assert.equal(state.cases.filter(row => row.workflowStatus === "pending").length, 2);
+  assert.equal(selectProactiveInsights(state).length, 1);
+  assert.equal(state.cases.filter(row => row.workflowStatus === "pending").length, 3);
   const unchanged = advanceWorkflows(state, sources, start);
   assert.equal(unchanged, state);
   state = answer(state, "The requirements are confirmed.");
   state = advanceWorkflows(state, sources, start);
-  assert.equal(selectProactiveInsights(state).length, 2);
-  assert.equal(state.cases[2].workflowStatus, "waiting_for_answer");
+  assert.equal(selectProactiveInsights(state).length, 0);
+  assert.deepEqual(state.cases.map(row => row.workflowStatus), ["answered", "pending", "pending", "pending"]);
+  const tomorrow = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  state = advanceWorkflows(state, sources, tomorrow);
+  assert.equal(selectProactiveInsights(state).length, 1);
+  assert.equal(state.cases.filter(row => row.workflowStatus === "waiting_for_answer").length, 1);
+  assert.equal(state.cases.filter(row => row.workflowStatus === "pending").length, 3);
   assert.equal(selectProactiveInsights(setWorkflowSettings(state, { maxVisibleQuestions: 1 })).length, 1);
   assert.ok(Object.values(triggerRole).every(role => PARTNER_ROLE_IDS.includes(role)));
   assert.throws(() => setWorkflowSettings(state, { maxVisibleQuestions: 6 }), /invalid_settings/);

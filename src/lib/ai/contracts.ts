@@ -23,6 +23,7 @@ export type AIASKContext = {
   ideaId?: string;
   projectId?: string;
   goal?: string;
+  currentDate?: string;
   relevantNotes?: string[];
   relevantDecisions?: string[];
   relevantTasks?: string[];
@@ -122,6 +123,17 @@ export type AIASKOutput = {
 
 export type PartnerFollowUpMessage = { role: "user" | "assistant"; content: string };
 
+export type NotesChatAction = {
+  action: "create_todo" | "set_follow_up" | "explore_idea" | "save_summary";
+  title: string;
+  description: string;
+  rationale: string;
+  noteId: string | null;
+  dueDate: string | null;
+  content: string | null;
+  requiresConfirmation: true;
+};
+
 export type AIASKRunRequest =
   | {
       kind: "structured";
@@ -135,12 +147,54 @@ export type AIASKRunRequest =
       perspectiveContext: string;
       history: PartnerFollowUpMessage[];
       plannerChat?: true;
+      notesChat?: true;
+      workspaceNotesScope?: true;
+      notesContextKey?: string;
       retryMessageId?: string;
     };
 
 export type ValidationResult<T> =
   | { success: true; data: T }
   | { success: false; error: string };
+
+export function validateNotesChatActions(value: unknown, allowedNoteIds?: ReadonlySet<string>): NotesChatAction[] | null {
+  if (!Array.isArray(value) || value.length > 4) return null;
+  const actions: NotesChatAction[] = [];
+  const validDate = (date: unknown) => date === null || (
+    typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)
+    && Number.isFinite(Date.parse(`${date}T12:00:00`))
+    && new Date(`${date}T12:00:00`).toISOString().slice(0, 10) === date
+  );
+  for (const item of value) {
+    if (!isRecord(item)
+      || !["create_todo", "set_follow_up", "explore_idea", "save_summary"].includes(String(item.action))
+      || !isNonEmptyString(item.title, 180)
+      || !isNonEmptyString(item.description, 800)
+      || !isNonEmptyString(item.rationale, 500)
+      || (item.noteId !== null && (typeof item.noteId !== "string" || item.noteId.length > 120))
+      || !validDate(item.dueDate)
+      || (item.content !== null && !isNonEmptyString(item.content, 3000))
+      || item.requiresConfirmation !== true) return null;
+    const action = item.action as NotesChatAction["action"];
+    const noteId = item.noteId as string | null;
+    const content = item.content as string | null;
+    if (noteId && allowedNoteIds && !allowedNoteIds.has(noteId)) return null;
+    if (action === "set_follow_up" && (!noteId || !content)) return null;
+    if ((action === "explore_idea" || action === "save_summary") && !content) return null;
+    if (action !== "create_todo" && item.dueDate !== null) return null;
+    actions.push({
+      action,
+      title: item.title.trim(),
+      description: item.description.trim(),
+      rationale: item.rationale.trim(),
+      noteId,
+      dueDate: item.dueDate as string | null,
+      content,
+      requiresConfirmation: true,
+    });
+  }
+  return actions;
+}
 
 const LEGACY_PARTNER_ROLE_MAP = {
   knowledge: "knowledge_partner",
@@ -165,6 +219,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= maxLength;
+}
+
+export function verifiedNotesContextNoteIds(contextText: string, contextKey: string): string[] | null {
+  try {
+    const context: unknown = JSON.parse(contextText);
+    if (!isRecord(context) || !Array.isArray(context.records) || context.records.length === 0 || context.records.length > 500) return null;
+    const ids: string[] = [];
+    for (const record of context.records) {
+      if (!isRecord(record) || typeof record.id !== "string" || !record.id || record.id.length > 120 || typeof record.text !== "string") return null;
+      ids.push(record.id);
+    }
+    if (new Set(ids).size !== ids.length || context.recordCount !== ids.length) return null;
+    if (contextKey.startsWith("selected-note-")) {
+      return context.scope === "Selected Note" && ids.length === 1
+        && ids[0] === contextKey.slice("selected-note-".length) ? ids : null;
+    }
+    if (context.scope !== "Current View") return null;
+    let hash = 2166136261;
+    for (const character of [...ids].sort().join("|")) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+    const expectedKey = `current-view-${ids.length}-${(hash >>> 0).toString(36)}`;
+    return contextKey === expectedKey ? ids : null;
+  } catch {
+    return null;
+  }
 }
 
 export function isPartnerRole(value: unknown): value is PartnerRole {
@@ -214,6 +292,13 @@ function validateContext(value: unknown): ValidationResult<AIASKContext | undefi
       return { success: false, error: `context.${field} must be a non-empty string.` };
     }
     context[field] = item.trim();
+  }
+
+  if (value.currentDate !== undefined) {
+    if (typeof value.currentDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.currentDate)) {
+      return { success: false, error: "context.currentDate must use the YYYY-MM-DD format." };
+    }
+    context.currentDate = value.currentDate;
   }
 
   for (const field of ["relevantNotes", "relevantDecisions", "relevantTasks", "relevantCalendarItems"] as const) {
@@ -312,8 +397,33 @@ export function parseAIASKRunRequest(value: unknown): ValidationResult<AIASKRunR
   if (value.plannerChat !== undefined && value.plannerChat !== true) {
     return { success: false, error: "plannerChat must be true when provided." };
   }
+  if (value.notesChat !== undefined && value.notesChat !== true) {
+    return { success: false, error: "notesChat must be true when provided." };
+  }
+  if (value.notesChat === true && (!isFollowUp || value.plannerChat === true)) {
+    return { success: false, error: "Notes chat must use the existing AI Team follow-up conversation mode." };
+  }
   if (value.plannerChat === true && !isFollowUp) {
     return { success: false, error: "Planner chat must use the existing follow-up conversation mode." };
+  }
+  if (value.workspaceNotesScope !== undefined && value.workspaceNotesScope !== true) {
+    return { success: false, error: "workspaceNotesScope must be true when provided." };
+  }
+  if (value.workspaceNotesScope === true && (!isFollowUp || value.plannerChat === true || value.notesChat !== true)) {
+    return { success: false, error: "Authorized Workspace Notes require a standard AI Team follow-up conversation." };
+  }
+  if (value.notesContextKey !== undefined && (!isFollowUp || value.plannerChat === true
+    || value.workspaceNotesScope === true || value.notesChat !== true || !isNonEmptyString(value.notesContextKey, 120))) {
+    return { success: false, error: "notesContextKey is not valid for this conversation." };
+  }
+  if (value.notesChat === true) {
+    if (value.workspaceNotesScope === true && value.notesContextKey !== undefined) {
+      return { success: false, error: "Authorized Workspace Notes cannot include a client note context key." };
+    }
+    if (value.workspaceNotesScope !== true && (typeof value.notesContextKey !== "string"
+      || !(/^(selected-note-[a-z0-9_-]{1,100}|current-view-\d+-[a-z0-9]+)$/i).test(value.notesContextKey))) {
+      return { success: false, error: "Notes chat requires a valid Selected Note or Current View context." };
+    }
   }
   const historyResult = isFollowUp ? validateFollowUpHistory(value.history) : null;
   if (historyResult && !historyResult.success) return historyResult;
@@ -357,6 +467,14 @@ export function parseAIASKRunRequest(value: unknown): ValidationResult<AIASKRunR
   if (value.plannerChat === true && parsedInput.data.partnerRole !== PARTNER_ROLE_ID.planner) {
     return { success: false, error: "Planner chat requires the AI Planner role." };
   }
+  if (value.workspaceNotesScope === true && parsedInput.data.context?.ideaId) {
+    return { success: false, error: "Authorized Workspace Notes cannot include a Selected Note reference." };
+  }
+  if (value.notesChat === true && value.notesContextKey?.startsWith("selected-note-")
+    && parsedInput.data.context?.ideaId
+    && parsedInput.data.context.ideaId !== value.notesContextKey.slice("selected-note-".length)) {
+    return { success: false, error: "The selected note reference does not match its context key." };
+  }
 
   return {
     success: true,
@@ -367,6 +485,9 @@ export function parseAIASKRunRequest(value: unknown): ValidationResult<AIASKRunR
       perspectiveContext: value.perspectiveContext,
       history: historyResult && historyResult.success ? historyResult.data : [],
       ...(value.plannerChat === true ? { plannerChat: true } : {}),
+      ...(value.notesChat === true ? { notesChat: true } : {}),
+      ...(value.workspaceNotesScope === true ? { workspaceNotesScope: true } : {}),
+      ...(typeof value.notesContextKey === "string" ? { notesContextKey: value.notesContextKey.trim() } : {}),
       ...(retryMessageId ? { retryMessageId } : {}),
     },
   };

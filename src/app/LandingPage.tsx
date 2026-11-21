@@ -19,7 +19,7 @@ type LandingPageProps = {
 const tools = [
   { view: "calendar", title: "Calendar", label: "Make room for what matters.", icon: CalendarDays, text: "Keep your plans in view. Prepare for important events and pick up the follow-up afterward." },
   { view: "todos", title: "To-do", label: "A clear next step.", icon: ListTodo, text: "Give your actions a home. See what is coming up, what needs attention, and what you have already done." },
-  { view: "inbox", title: "Idea Box", label: "Good ideas deserve a little space.", icon: Lightbulb, text: "Capture the thought before it disappears. Explore it with your AI team and choose where to go next." },
+  { view: "inbox", title: "Notes & Ideas", label: "Capture Everything. Discover What Matters.", icon: Lightbulb, text: "Save a note, reflection, action item, or idea. Explore it with your AI Team when useful." },
 ] as const;
 
 const teamPartners = [
@@ -134,7 +134,7 @@ export default function LandingPage({ onOpenView, capture }: LandingPageProps) {
           </li>)}
         </ol>
         <div className="lp-capture">{capture}</div>
-        <button type="button" className="lp-idea-link" onClick={() => onOpenView("inbox")}>Explore your Idea Box <ArrowUpRight size={15} aria-hidden="true" /></button>
+        <button type="button" className="lp-idea-link" onClick={() => onOpenView("inbox")}>Explore Notes &amp; Ideas <ArrowUpRight size={15} aria-hidden="true" /></button>
       </div>
     </section>
 

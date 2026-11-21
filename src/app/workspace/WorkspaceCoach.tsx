@@ -9,6 +9,7 @@ import { formatPartnerResponse } from "../../lib/ai/conversations";
 import { PARTNER_ROLE_ID, type AIASKContext, type PartnerResponse } from "../../lib/ai/contracts";
 import type { AIConversation } from "../../lib/ai/conversations";
 import { workflowCoachContext, workflowRoleNames, type WorkflowCoachRequest } from "../../lib/proactive/coach";
+import type { NoteType } from "../../lib/workspace/browser-records";
 
 type CoachIdea = {
   id: string;
@@ -18,6 +19,7 @@ type CoachIdea = {
   status?: "Saved" | "In progress" | "Done";
   nextStep?: string;
   progressUpdatedAt?: string;
+  type?: NoteType;
 };
 type CoachTodo = { id: string; title: string; dueDate: string; status: "Open" | "Done"; completedAt?: string };
 type CoachEvent = { id: string; title: string; scheduledDate: string; scheduledTime: string | null };
@@ -32,7 +34,7 @@ type WorkspaceCoachProps = {
 };
 
 const coachPrompts = [
-  "Which idea should I focus on now?",
+  "Which note should I focus on now?",
   "What might be slowing my follow-through?",
   "How can I make my next step easier?",
   "What progress pattern do you notice?",
@@ -78,7 +80,7 @@ function makeWorkspaceCoachContext(ideas: CoachIdea[], planner: CoachPlanner): A
     .slice(0, 5);
 
   return {
-    relevantNotes: recentIdeas.map(idea => "Idea: " + shortCoachText(idea.text) + " | Status: " + ideaStatus(idea) + (idea.nextStep ? " | Next step: " + shortCoachText(idea.nextStep) : "")),
+    relevantNotes: recentIdeas.map(idea => `${idea.type ?? "Idea"}: ` + shortCoachText(idea.text) + " | Status: " + ideaStatus(idea) + (idea.nextStep ? " | Next step: " + shortCoachText(idea.nextStep) : "")),
     relevantDecisions: outcomes.map(idea => "Progress record: " + shortCoachText(idea.text) + " | Status: " + ideaStatus(idea) + (idea.nextStep ? " | Note: " + shortCoachText(idea.nextStep) : "")),
     relevantTasks: [
       ...openTasks.map(todo => "Open action: " + shortCoachText(todo.title) + (todo.dueDate ? " | Due: " + todo.dueDate : "")),
@@ -290,12 +292,12 @@ export default function WorkspaceCoach({ ideas, planner, onShowHistory, workflow
     <div className="workspace-coach-context-controls">
       <label><input type="checkbox" checked={contextEnabled} onChange={event => setContextEnabled(event.target.checked)} /><span>{workflowRequest ? "Use this workflow snapshot" : "Use my Workspace snapshot"}</span></label>
       <button type="button" aria-expanded={contextDetailsOpen} onClick={() => setContextDetailsOpen(open => !open)}>What's shared? <ChevronDown size={13} /></button>
-      {contextEnabled && snapshotTotal > 0 && <span className="workspace-coach-context-count">{counts.ideas} ideas | {counts.actions} actions | {counts.calendar} plans | {counts.outcomes} progress records</span>}
+      {contextEnabled && snapshotTotal > 0 && <span className="workspace-coach-context-count">{counts.ideas} notes | {counts.actions} actions | {counts.calendar} plans | {counts.outcomes} progress records</span>}
       {contextEnabled && snapshotTotal === 0 && <span className="workspace-coach-context-count">No Workspace records to include yet</span>}
     </div>
     {contextDetailsOpen && <p className="workspace-coach-privacy">{workflowRequest
       ? "Only this reviewed task, up to 5 confirmed facts, 3 labelled unconfirmed proposals and 3 original replies are shared. Your question and Coach replies are saved in AI Team Conversations. No broader Workspace snapshot is added."
-      : "When enabled, up to 5 recent ideas, 8 actions, 5 plans in the next 14 days, and 3 progress records are sent with each question. Your question and Coach replies are saved in AI Team Conversations; your Workspace records remain in this browser."}</p>}
+      : "When enabled, up to 5 recent Notes & Ideas records, 8 actions, 5 plans in the next 14 days, and 3 progress records are sent with each question. Your question and Coach replies are saved in AI Team Conversations; your Workspace records remain in this browser."}</p>}
     <div className="workspace-coach-prompts" role="group" aria-label="Suggested questions">
       {(workflowRequest ? workflowPrompts : coachPrompts).map(prompt => <button type="button" key={prompt} onClick={() => setDraft(prompt)} disabled={loading || historyLoading}>{prompt}</button>)}
     </div>

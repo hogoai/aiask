@@ -1,6 +1,6 @@
 import type { OwnedSourceObservation, ProactiveCase, WorkflowCommand, WorkflowHistoryEntry, WorkflowInference, WorkflowSettings, WorkflowState, WorkflowStatus, WorkflowTrigger } from "./contracts";
 import { buildQuestionInput, DRAWINGS_BLOCKER, generateRuleQuestion, proposeAnswerInferences } from "./interfaces";
-import { assertClock, assertObservations, assertOwner, detectTriggers, isTerminal, isTimeZone, normalizeFollowUpTime, sourceSnapshot, triggerRole, WorkflowError } from "./rules";
+import { assertClock, assertObservations, assertOwner, detectTriggers, isTerminal, isTimeZone, normalizeFollowUpTime, sourceSnapshot, triggerRole, WorkflowError, zonedDateKey } from "./rules";
 
 export const ALLOWED_TRANSITIONS: Readonly<Record<WorkflowStatus, readonly WorkflowStatus[]>> = {
   pending: ["waiting_for_answer", "snoozed", "dismissed", "resolved"],
@@ -127,7 +127,10 @@ export function advanceWorkflows(state: WorkflowState, observations: readonly Ow
     if (source?.type === "conversation") next = { ...next, cases: next.cases.map(item => item.sourceType === "conversation" && item.sourceId === source.record.id ? { ...item, assignedRoleId: source.record.partnerRole } : item) };
   }
   if (!next.settings.enabled) return next;
-  let available = next.settings.maxVisibleQuestions - next.cases.filter(item => item.workflowStatus === "waiting_for_answer").length;
+  const today = zonedDateKey(now, next.settings.timeZone);
+  const alreadyAskedToday = next.cases.some(item => item.lastAskedAt &&
+    zonedDateKey(new Date(item.lastAskedAt), next.settings.timeZone) === today);
+  let available = alreadyAskedToday ? 0 : Math.max(0, 1 - next.cases.filter(item => item.workflowStatus === "waiting_for_answer").length);
   for (const item of next.cases) {
     if (available <= 0) break;
     if (item.workflowStatus !== "pending") continue;
@@ -153,8 +156,11 @@ export function applyWorkflowCommand(state: WorkflowState, command: WorkflowComm
   const at = now.toISOString();
   if (command.type === "ask") {
     const output = command.output;
+    const today = zonedDateKey(now, state.settings.timeZone);
+    const alreadyAskedToday = state.cases.some(entry => entry.lastAskedAt &&
+      zonedDateKey(new Date(entry.lastAskedAt), state.settings.timeZone) === today);
     if (!state.settings.enabled || item.workflowStatus !== "pending" ||
-      state.cases.filter(entry => entry.workflowStatus === "waiting_for_answer").length >= state.settings.maxVisibleQuestions) throw new WorkflowError("question_not_available");
+      alreadyAskedToday || state.cases.filter(entry => entry.workflowStatus === "waiting_for_answer").length >= 1) throw new WorkflowError("question_not_available");
     if (output.caseId !== item.id || output.triggerKey !== item.triggerKey || output.sourceRevision !== item.sourceSnapshot.revision ||
       output.partnerRole !== item.assignedRoleId || output.locale !== "en" || typeof output.question !== "string" || !output.question.trim() || output.question.length > 500) throw new WorkflowError("stale_or_invalid_question");
     const question = { id: id(runtime), text: output.question, askedAt: at, triggerKey: item.triggerKey, sourceRevision: item.sourceSnapshot.revision, invalidatedAt: null };

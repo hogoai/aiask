@@ -52,7 +52,7 @@ export function plannerObservations(ownerId: string, records: WorkspaceRecords, 
   const calendar = events.filter(event => trackedCalendarIds.has(event.id) && event.ownerId === ownerId && event.origin !== "task-deadline");
   const observations: OwnedSourceObservation[] = calendar.map(event => ({
     ownerId, ownership: "verified_owner",
-    source: { type: "calendar", record: { ...event, completed: todos.some(todo => todo.ownerId === ownerId && todo.id === event.todoId && todo.status === "Done") } },
+    source: { type: "calendar", record: { ...event, completed: todos.some(todo => todo.ownerId === ownerId && (todo.id === event.todoId || todo.eventId === event.id) && todo.status === "Done") } },
   }));
   return observations;
 }

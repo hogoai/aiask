@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Check, LoaderCircle, MessageCircle, Send, X } from "lucide-react";
 import { defaultLocale } from "../i18n/config";
 import { PARTNER_ROLE_ID, validateAIASKOutput, validatePlannerChange, type AIASKContext, type PlannerChange } from "../lib/ai/contracts";
@@ -11,30 +11,42 @@ type Props = {
   userId: string | null;
   onConfirm: (change: PlannerChange, conversationId: string) => string | null;
 };
+type RetryAction =
+  | { kind: "request"; conversationId: string; userMessageId: string }
+  | { kind: "save_reply"; userMessageId: string; model?: string; usage?: { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null } };
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
   status?: string;
   metadata?: Record<string, unknown>;
-  retry?: { userMessageId: string; model?: string; usage?: { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null } };
+  retry?: RetryAction;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function readHistory(value: unknown): ChatMessage[] | null {
+function localDateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function readHistory(value: unknown, conversationId: string): ChatMessage[] | null {
   if (!isRecord(value) || !isRecord(value.conversation) || !Array.isArray(value.conversation.messages)) return null;
   const messages: ChatMessage[] = [];
   for (const item of value.conversation.messages) {
     if (!isRecord(item) || (item.role !== "user" && item.role !== "assistant") || typeof item.content !== "string") continue;
+    const id = typeof item.id === "string" ? item.id : `${messages.length}`;
+    const status = typeof item.status === "string" ? item.status : undefined;
     messages.push({
-      id: typeof item.id === "string" ? item.id : `${messages.length}`,
+      id,
       role: item.role,
       content: item.content,
-      status: typeof item.status === "string" ? item.status : undefined,
+      status,
       metadata: isRecord(item.metadata) ? item.metadata : undefined,
+      retry: item.role === "user" && (status === "failed" || status === "save_failed") && typeof item.id === "string"
+        ? { kind: "request", conversationId, userMessageId: item.id }
+        : undefined,
     });
   }
   return messages;
@@ -90,6 +102,7 @@ export default function PlannerAIChat({ scope, context, userId, onConfirm }: Pro
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
+  const requestInFlight = useRef(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [savingMessageId, setSavingMessageId] = useState<string | null>(null);
   const [pendingChange, setPendingChange] = useState<PlannerChange | null>(null);
@@ -122,7 +135,7 @@ export default function PlannerAIChat({ scope, context, userId, onConfirm }: Pro
             ? payload.error.message : "The AI Planner conversation could not be loaded.";
           throw new Error(message);
         }
-        const history = readHistory(payload);
+        const history = readHistory(payload, conversationId);
         if (!history) throw new Error("The AI Planner returned an invalid conversation history.");
         if (active) setMessages(history);
       })
@@ -131,16 +144,9 @@ export default function PlannerAIChat({ scope, context, userId, onConfirm }: Pro
     return () => { active = false; };
   }, [open, storageReady, conversationId, userId, messages.length]);
 
-  async function sendMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const userMessage = draft.trim();
-    if (!userMessage || loading || pendingChange || !storageReady || !userId) return;
-    setLoading(true);
-    setError("");
-    setNotice("");
-    setDraft("");
-    const optimisticId = `local-${Date.now()}`;
-    setMessages(current => [...current, { id: optimisticId, role: "user", content: userMessage, status: "pending" }]);
+  async function runMessageRequest(userMessage: string, messageId: string, retryAction?: RetryAction) {
+    let nextRetry: RetryAction | undefined;
+    const requestContext: AIASKContext = { ...context, currentDate: localDateKey(new Date()) };
     try {
       const response = await fetch("/api/ai/run", {
         method: "POST",
@@ -149,19 +155,25 @@ export default function PlannerAIChat({ scope, context, userId, onConfirm }: Pro
           mode: "follow_up",
           plannerChat: true,
           partnerRole: PARTNER_ROLE_ID.planner,
-          conversationId: conversationId || undefined,
+          conversationId: retryAction?.kind === "request" ? retryAction.conversationId : conversationId || undefined,
+          retryMessageId: retryAction?.kind === "request" ? retryAction.userMessageId : undefined,
           userMessage,
           originalIdea: `AI Planner conversation for ${scope === "calendar" ? "Calendar" : "To-do"}`,
           perspectiveContext: "The user is asking for planning help grounded in their current Calendar or To-do page.",
           history: [{ role: "user", content: userMessage }],
-          context,
+          context: requestContext,
           locale: defaultLocale,
           expectedUserId: userId ?? undefined,
         }),
       });
       const payload: unknown = await response.json();
       if (!response.ok) {
-        if (isRecord(payload) && typeof payload.conversationId === "string") saveConversationId(payload.conversationId);
+        if (isRecord(payload) && typeof payload.conversationId === "string") {
+          saveConversationId(payload.conversationId);
+          if (payload.historySaved === true && typeof payload.userMessageId === "string") {
+            nextRetry = { kind: "request", conversationId: payload.conversationId, userMessageId: payload.userMessageId };
+          }
+        }
         const message = isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === "string"
           ? payload.error.message : "The AI Planner could not respond. Please try again.";
         throw new Error(message);
@@ -172,25 +184,43 @@ export default function PlannerAIChat({ scope, context, userId, onConfirm }: Pro
         throw new Error("The AI Planner returned an incomplete response. Please try again.");
       }
       saveConversationId(output.conversationId);
+      const replyRetry: RetryAction | undefined = output.saved === false && output.userMessageId
+        ? { kind: "save_reply", userMessageId: output.userMessageId, model: output.model, usage: output.usage }
+        : undefined;
       setMessages(current => [
-        ...current.map(message => message.id === optimisticId ? { ...message, status: "completed" } : message),
+        ...current.map(message => message.id === messageId ? { ...message, status: "completed", retry: undefined } : message),
         {
           id: output.messageId ?? `${Date.now()}-assistant`,
           role: "assistant",
           content: output.answer!,
           status: output.saved === false ? "save_failed" : "completed",
           metadata: output.plannerChange ? { plannerChange: output.plannerChange } : undefined,
-          retry: output.saved === false && output.userMessageId
-            ? { userMessageId: output.userMessageId, model: output.model, usage: output.usage }
-            : undefined,
+          retry: replyRetry,
         },
       ]);
       setPendingChange(output.plannerChange && output.plannerChange.action !== "none" ? output.plannerChange : null);
       if (output.saved === false) setError("The reply is shown, but it could not be saved to conversation history.");
     } catch (cause) {
-      setMessages(current => current.map(message => message.id === optimisticId ? { ...message, status: "failed" } : message));
+      setMessages(current => current.map(message => message.id === messageId ? { ...message, status: "failed", retry: nextRetry } : message));
       setError(cause instanceof Error ? cause.message : "The AI Planner could not respond. Please try again.");
+    }
+  }
+
+  async function sendMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const userMessage = draft.trim();
+    if (!userMessage || requestInFlight.current || loading || pendingChange || !storageReady || !userId) return;
+    requestInFlight.current = true;
+    setLoading(true);
+    setError("");
+    setNotice("");
+    setDraft("");
+    const messageId = `local-${crypto.randomUUID()}`;
+    setMessages(current => [...current, { id: messageId, role: "user", content: userMessage, status: "pending" }]);
+    try {
+      await runMessageRequest(userMessage, messageId);
     } finally {
+      requestInFlight.current = false;
       setLoading(false);
     }
   }
@@ -205,7 +235,8 @@ export default function PlannerAIChat({ scope, context, userId, onConfirm }: Pro
   }
 
   async function retrySavingReply(message: ChatMessage) {
-    if (!message.retry || !conversationId || savingMessageId) return;
+    const retry = message.retry;
+    if (!retry || retry.kind !== "save_reply" || !conversationId || savingMessageId) return;
     setSavingMessageId(message.id);
     setError("");
     try {
@@ -214,13 +245,13 @@ export default function PlannerAIChat({ scope, context, userId, onConfirm }: Pro
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "retry_save",
-          userMessageId: message.retry.userMessageId,
+          userMessageId: retry.userMessageId,
           reply: {
             kind: "follow_up",
             answer: message.content,
             plannerChange: message.metadata?.plannerChange,
-            model: message.retry.model,
-            usage: message.retry.usage,
+            model: retry.model,
+            usage: retry.usage,
           },
         }),
       });
@@ -236,6 +267,22 @@ export default function PlannerAIChat({ scope, context, userId, onConfirm }: Pro
       setError(cause instanceof Error ? cause.message : "The AI reply could not be saved.");
     } finally {
       setSavingMessageId(null);
+    }
+  }
+
+  async function retryFailedRequest(message: ChatMessage) {
+    const retry = message.retry;
+    if (!retry || retry.kind !== "request" || requestInFlight.current || loading || !userId) return;
+    requestInFlight.current = true;
+    setLoading(true);
+    setError("");
+    setNotice("");
+    setMessages(current => current.map(item => item.id === message.id ? { ...item, status: "pending", retry: undefined } : item));
+    try {
+      await runMessageRequest(message.content, message.id, retry);
+    } finally {
+      requestInFlight.current = false;
+      setLoading(false);
     }
   }
 
@@ -265,10 +312,18 @@ export default function PlannerAIChat({ scope, context, userId, onConfirm }: Pro
         {!userId && <p className="planner-ai-state" role="status">Verify your sign-in before starting an AI Planner conversation.</p>}
         {!loadingHistory && messages.length === 0 && <p className="planner-ai-empty">Ask about free time, overdue tasks, priorities, schedule conflicts, or a next step.</p>}
         {messages.map(message => <article className={`planner-ai-message ${message.role}`} key={message.id}>
-          <div className="planner-ai-message-label">{message.role === "user" ? "You" : "AI Planner"}{message.status === "failed" && " · not sent"}{message.status === "save_failed" && " · history not saved"}</div>
+          <div className="planner-ai-message-label">
+            {message.role === "user" ? "You" : "AI Planner"}
+            {message.role === "user" && message.status === "failed" && " · response failed"}
+            {message.role === "user" && message.status === "save_failed" && " · answer not saved"}
+            {message.role === "assistant" && message.status === "save_failed" && " · history not saved"}
+          </div>
           <p>{message.content}</p>
           {historicalChange(message) && <small className="planner-ai-history-preview">Past suggestion (not applied): {describeChange(historicalChange(message)!, context)}</small>}
-          {message.retry && <button type="button" className="planner-ai-retry" onClick={() => void retrySavingReply(message)} disabled={savingMessageId !== null}>
+          {message.retry?.kind === "request" && <button type="button" className="planner-ai-retry" onClick={() => void retryFailedRequest(message)} disabled={loading || savingMessageId !== null}>
+            {loading && message.status === "pending" ? "Retrying answer…" : "Retry answer"}
+          </button>}
+          {message.retry?.kind === "save_reply" && <button type="button" className="planner-ai-retry" onClick={() => void retrySavingReply(message)} disabled={loading || savingMessageId !== null}>
             {savingMessageId === message.id ? "Saving reply…" : "Retry saving reply"}
           </button>}
         </article>)}

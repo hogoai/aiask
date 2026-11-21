@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, Clock3, MessageCircleQuestion, Sparkles } from "lucide-react";
-import type { ProactiveCase, WorkflowCommand } from "../../lib/proactive/contracts";
+import type { ProactiveCase, TriggerType, WorkflowCommand } from "../../lib/proactive/contracts";
 import type { WorkflowAccountScope } from "../../lib/proactive/storage";
 import type { TaskReview } from "../../lib/proactive/sources";
 import { workflowSuggestion } from "../../lib/proactive/interfaces";
@@ -22,6 +22,39 @@ const statusText: Record<ProactiveCase["workflowStatus"], string> = {
   pending: "Queued", waiting_for_answer: "Waiting for your answer", answered: "Answer saved",
   waiting_for_followup: "Follow-up scheduled", snoozed: "Snoozed", dismissed: "Follow-up dismissed", resolved: "Follow-up resolved",
 };
+
+function quickAnswers(trigger: TriggerType) {
+  if (trigger === "task_needs_clarification" || trigger === "task_deadline_near") return [
+    { label: "On track", text: "This is on track." },
+    { label: "Something is blocking me", text: "Something is blocking me." },
+    { label: "I need help with the next step", text: "I need help with the next step." },
+  ];
+  if (trigger === "calendar_prepare") return [
+    { label: "Ready", text: "The preparations are ready." },
+    { label: "I need to prepare", text: "I still need to prepare." },
+    { label: "Something is outstanding", text: "Something is still outstanding." },
+  ];
+  if (trigger === "calendar_review") return [
+    { label: "No follow-up needed", text: "This went well; no follow-up is needed." },
+    { label: "Follow-up needed", text: "I have a follow-up to take." },
+    { label: "I need time to review", text: "I need time to review this event." },
+  ];
+  if (trigger === "blocker_followup" || trigger === "followup_due") return [
+    { label: "Still waiting", text: "I am still waiting." },
+    { label: "There has been progress", text: "There has been some progress." },
+    { label: "I need help", text: "I need help with the next step." },
+  ];
+  if (trigger === "source_updated") return [
+    { label: "Still relevant", text: "The earlier question is still relevant." },
+    { label: "The next step changed", text: "The next step has changed." },
+    { label: "I need to revisit this", text: "I need to revisit this later." },
+  ];
+  return [
+    { label: "I have a next step", text: "I have a next step." },
+    { label: "I need help", text: "I need help working out the next step." },
+    { label: "No longer relevant", text: "This is no longer relevant." },
+  ];
+}
 
 export default function ProactiveInsights(props: Props) {
   const account = props.account;
@@ -45,6 +78,11 @@ function ScopedInsights({ ownerId, onDiscuss, conversationLink }: Props & { owne
   const ready = view?.status === "ready";
   const state = ready ? view.state : null;
   const selectedReview = reviews?.find(review => review.record.id === selectedId);
+  const pilotMetrics = state ? {
+    asked: state.cases.reduce((count, item) => count + item.memory.questions.length, 0),
+    answered: state.cases.reduce((count, item) => count + item.memory.answers.length, 0),
+    dismissed: state.cases.reduce((count, item) => count + item.memory.history.filter(entry => entry.event === "user_dismissed").length, 0),
+  } : null;
   useEffect(() => {
     if (conversationLink?.ownerId !== ownerId) return;
     const before = controller.snapshot();
@@ -88,14 +126,13 @@ function ScopedInsights({ ownerId, onDiscuss, conversationLink }: Props & { owne
         <label><input type="checkbox" checked={state.settings.enabled} disabled={busy} onChange={event => {
           const enabled = event.target.checked; void run(token => controller.settings(token, { enabled }), enabled ? "Proactive questions enabled." : "Proactive questions paused.");
         }} /> Proactive questions</label>
-        <label>Show <select aria-label="Maximum visible proactive questions" value={state.settings.maxVisibleQuestions} disabled={busy} onChange={event => {
-          const count = Number(event.target.value); void run(token => controller.settings(token, { maxVisibleQuestions: count }));
-        }}><option value={1}>1 question</option><option value={2}>2 questions</option><option value={3}>3 questions</option></select></label>
+        <span className="proactive-daily-limit">At most one new question per local day ({state.settings.timeZone})</span>
         <details><summary>Time zone: {state.settings.timeZone}</summary><form onSubmit={event => { event.preventDefault(); if (!isTimeZone(timeZoneDraft.trim())) { setNotice("Use a valid IANA time zone, such as Europe/Berlin."); return; } void run(token => controller.settings(token, { timeZone: timeZoneDraft.trim() })); }}>
           <label>Time zone<input required aria-label="Workflow time zone" value={timeZoneDraft} placeholder={state.settings.timeZone} onChange={event => setTimeZoneDraft(event.target.value)} /></label>
           <small>Use an IANA name, such as Europe/Berlin.</small><button disabled={busy || !timeZoneDraft.trim()}>Save time zone</button>
         </form></details>
       </div>
+      {pilotMetrics && pilotMetrics.asked > 0 && <p className="proactive-pilot-metrics" aria-label="Local pilot response summary">Local pilot · {pilotMetrics.asked} questions · {pilotMetrics.answered} answered · {pilotMetrics.dismissed} dismissed</p>}
       {!state.settings.enabled && <p className="proactive-note">Questions are paused. Your answers and follow-up times are preserved.</p>}
       {reviewOpen && <div id="proactive-source-review" className="proactive-source-review" aria-label="Review task ownership">
         <div className="proactive-review-heading"><h3>Connect a task you own</h3><button type="button" onClick={() => { setReviewOpen(false); setReviews(null); }}>Close</button></div>
@@ -160,6 +197,10 @@ export function TaskCaseCard({ item, current, showQuestion, enabled, busy, timeZ
       : "The linked item changed. Questions are paused until it is reviewed."}</p>{item.sourceType === "task" && <button type="button" disabled={busy} onClick={onReview}>Review task</button>}</div>}
     {current && showQuestion && enabled && item.currentQuestion && <>
       <p className="proactive-question">{item.currentQuestion.text}</p>
+      <div className="proactive-quick-answers" role="group" aria-label="Quick answers">
+        {quickAnswers(item.triggerType).map(option => <button key={option.text} type="button" disabled={busy}
+          onClick={() => void command({ type: "answer", caseId: item.id, questionId: item.currentQuestion!.id, text: option.text })}>{option.label}</button>)}
+      </div>
       {draft.text && draft.questionId !== item.currentQuestion.id && <details><summary>An unsent draft from an earlier question is available</summary><p>{draft.text}</p><button type="button" onClick={() => setDraft({ questionId: item.currentQuestion!.id, text: draft.text })}>Use this draft after reviewing the question</button></details>}
       <form onSubmit={async event => { event.preventDefault(); if (item.currentQuestion && await command({ type: "answer", caseId: item.id, questionId: item.currentQuestion.id, text: answer })) setDraft({ questionId: "", text: "" }); }}>
         <label>Your answer<textarea value={answer} rows={3} maxLength={4000} disabled={busy} onChange={event => setDraft({ questionId: item.currentQuestion!.id, text: event.target.value })} /></label>
@@ -193,7 +234,7 @@ export function TaskCaseCard({ item, current, showQuestion, enabled, busy, timeZ
     {current && !closed && <div className="proactive-actions">
       <button type="button" disabled={busy} onClick={onDiscuss}>Discuss with Coach <ArrowRight size={12} /></button>
       <button type="button" disabled={busy} onClick={() => void command({ type: "snooze", caseId: item.id, until: new Date(Date.now() + 3_600_000).toISOString() })}>Snooze 1 hour</button>
-      <button type="button" disabled={busy} onClick={() => void command({ type: "dismiss", caseId: item.id })}>Stop following up</button>
+      <button type="button" disabled={busy} onClick={() => void command({ type: "dismiss", caseId: item.id })}>Dismiss this question</button>
     </div>}
     {closed && current && item.sourceType === "task" && <button type="button" disabled={busy} onClick={onReview}>Review task to start another check-in</button>}
     {item.memory.answers.length > 0 && <details className="proactive-history"><summary>Follow-up record ({item.memory.answers.length} replies)</summary>

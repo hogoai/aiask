@@ -34,6 +34,8 @@
 .priority-control.compact { min-height: 23px; padding: 3px 6px; font-size: 8px; }
 .priority-form-control { justify-self: start; }
 .todo-item > .priority-control { flex: none; align-self: center; }
+.todo-overdue-status { display: inline-flex; align-items: center; width: max-content; padding: 3px 7px; border: 1px solid var(--line); border-radius: 20px; background: var(--panel); color: var(--muted); font-size: 8px; font-weight: 600; line-height: 1.2; white-space: nowrap; }
+.agenda-event > .todo-overdue-status { margin-top: 5px; }
 .calendar-priority-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: -7px 0 13px; color: var(--muted); font-size: 9px; }
 .calendar-priority-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .calendar-priority-legend i,.calendar-priority-count i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--priority-color); }

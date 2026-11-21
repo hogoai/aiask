@@ -76,7 +76,7 @@ export function workflowSuggestion(item: ProactiveCase): string | null {
 export function selectProactiveInsights(state: WorkflowState): ProactiveInsight[] {
   if (!state.settings.enabled) return [];
   return state.cases.filter(item => item.workflowStatus === "waiting_for_answer" && item.currentQuestion)
-    .slice(0, state.settings.maxVisibleQuestions).map(item => ({
+    .slice(0, 1).map(item => ({
       caseId: item.id, sourceType: item.sourceType, sourceId: item.sourceId, sourceTitle: item.sourceSnapshot.title,
       partnerRole: item.assignedRoleId, triggerReason: item.triggerReason, question: { ...item.currentQuestion! },
       lastAnswer: item.memory.answers.length ? { ...item.memory.answers[item.memory.answers.length - 1] } : null,
