@@ -12,7 +12,7 @@ AIASK brings people and a coordinated AI team together. Its six coordinated AI r
 
 ## Configure account sign-in (Supabase)
 
-The app uses Supabase Auth with passwordless email sign-in links. Google sign-in is optional. The browser uses only a Supabase project URL and publishable key; never put a service-role key in a `NEXT_PUBLIC_` variable or browser code.
+The app uses Supabase Auth with passwordless email sign-in using one-time codes. Google sign-in is optional. The browser uses only a Supabase project URL and publishable key; never put a service-role key in a `NEXT_PUBLIC_` variable or browser code.
 
 1. Create a Supabase project at [supabase.com](https://supabase.com/).
 2. In this project folder, copy `.env.example` to `.env.local`.
@@ -26,7 +26,7 @@ The app uses Supabase Auth with passwordless email sign-in links. Google sign-in
 4. In Supabase **SQL Editor**, run [`supabase/migrations/0001_personal_workspaces.sql`](supabase/migrations/0001_personal_workspaces.sql). It creates personal workspace, membership, idea, task, and calendar tables with row-level security. New accounts receive a personal workspace. Membership invites and team sharing are not implemented yet.
 5. In the same SQL Editor, run [`supabase/migrations/0002_ai_pilot_conversations.sql`](supabase/migrations/0002_ai_pilot_conversations.sql). This adds private AI conversation and message tables with per-user row-level security. Do not enable AI conversation history until this migration succeeds.
 6. In **Authentication → URL Configuration**, set the local Site URL to `http://localhost:3000` and add `http://localhost:3000/auth/callback` as a redirect URL. Add your production domain later when deploying.
-7. AIASK uses Supabase's default sign-in link template, so you do not need to edit the email template for local testing. The default email service is for development only: it restricts recipients to authorized organization team email addresses and applies strict rate limits. Set up a custom SMTP provider before inviting other people or launching publicly.
+7. AIASK email sign-in accepts the configured Supabase verification code (6–10 digits). In Supabase Authentication → Email Templates → Magic Link, replace the `{{ .ConfirmationURL }}` link with `{{ .Token }}` and tell users to enter the code in AIASK. The default email service is for development only: it restricts recipients to authorized organization team email addresses and applies strict rate limits. Set up a custom SMTP provider before inviting other people or launching publicly.
 8. To enable Google, configure its OAuth credentials under **Authentication → Providers → Google**. The Google button is shown but sign-in will fail until this is enabled.
 9. Stop and restart `npm run dev` after editing `.env.local`.
 
