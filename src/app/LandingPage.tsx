@@ -60,8 +60,8 @@ export default function LandingPage({ onOpenView, capture }: LandingPageProps) {
 
     <section className="lp-section lp-tools" id="tools">
       <div className="lp-container">
-        <div className="lp-section-heading"><span className="lp-eyebrow">Three everyday essentials</span><h2>Everything starts here.</h2><p>Three simple tools. One proactive AI team.</p></div>
-        <div className="lp-three-columns">
+        <div className="lp-section-heading"><span className="lp-eyebrow">Four everyday essentials</span><h2>Everything starts here.</h2><p>Four simple tools. One proactive AI team.</p></div>
+        <div className="lp-tool-grid">
           {tools.map(({ view, title, label, icon: Icon, text }) => <button type="button" key={view} className="lp-tool-card" onClick={() => onOpenView(view)}>
             <div className="lp-card-top"><span className="lp-card-icon"><Icon size={22} aria-hidden="true" /></span><ArrowUpRight size={18} aria-hidden="true" /></div>
             <h3>{title}</h3><strong>{label}</strong><p>{text}</p>

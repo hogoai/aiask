@@ -396,7 +396,7 @@ export default function DocumentLibrary({
         nextStep: explanation.nextStep.slice(0, 1000),
         uncertainty: explanation.uncertainty.slice(0, 3),
       }));
-      router.push("/partners?documentContext=1");
+      router.push(`/partners?documentContext=1&documentId=${encodeURIComponent(document.id)}`);
     } catch {
       setError("The explanation could not be opened in AI Team. Check this browser’s local storage and try again.");
     }
