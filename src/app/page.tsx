@@ -7,11 +7,13 @@ import NotesAIChat from "./NotesAIChat";
 import { applyPlannerChange, buildCalendarPlannerContext, buildTodoPlannerContext } from "../lib/planner/ai-planner";
 
 import { Suspense, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, ArrowRight, ArrowUpRight, Bell, BookOpen, CalendarDays, Check, Clock3, Compass, Inbox, Lightbulb, Menu, MessageCircleQuestion, MoreHorizontal, Pencil, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ArrowUpRight, Bell, BookOpen, CalendarDays, Check, Clock3, Compass, FileText, Inbox, Lightbulb, Menu, MessageCircleQuestion, MoreHorizontal, Pencil, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
 import { getTaskPriority, PriorityControl, type TaskPriority } from "./PriorityControl";
 import AccountControl from "./AccountControl";
 import LandingPage from "./LandingPage";
+import DocumentLibrary from "./documents/DocumentLibrary";
 import { useWorkspaceAccount } from "./workspace/useWorkspaceAccount";
 import { defaultLocale } from "../i18n/config";
 import "./site-navigation.css";
@@ -24,9 +26,30 @@ import { readWorkMemory, validateExtractedWorkMemory, workMemoryDuplicateKey, WO
 
 type IdeaInboxFilter = "All" | "Inbox" | "In progress" | "Done";
 type NotesView = "daily" | "all";
-type PlannerEvent = { ownerId?: string; id: string; ideaId: string | null; todoId: string | null; title: string; scheduledDate: string; scheduledTime: string | null; description: string; priority?: TaskPriority; completed?: boolean; createdAt: string; origin?: "calendar" | "task-deadline" };
-type PlannerTodo = { ownerId?: string; originConversationId?: string; id: string; ideaId: string | null; eventId: string | null; title: string; dueDate: string; status: "Open" | "Done"; priority?: TaskPriority; createdAt?: string; completedAt?: string; updatedAt?: string; remindAt?: string; remindedAt?: string; reminderPending?: boolean };
+type DocumentSource = { id: string; title: string };
+type DocumentPlannerDraft = { title: string; description: string; sourceDocument?: DocumentSource };
+type PlannerEvent = { ownerId?: string; id: string; ideaId: string | null; todoId: string | null; title: string; scheduledDate: string; scheduledTime: string | null; description: string; priority?: TaskPriority; completed?: boolean; createdAt: string; origin?: "calendar" | "task-deadline"; sourceDocumentId?: string; sourceDocumentTitle?: string };
+type PlannerTodo = { ownerId?: string; originConversationId?: string; id: string; ideaId: string | null; eventId: string | null; title: string; description?: string; dueDate: string; status: "Open" | "Done"; priority?: TaskPriority; createdAt?: string; completedAt?: string; updatedAt?: string; remindAt?: string; remindedAt?: string; reminderPending?: boolean; sourceDocumentId?: string; sourceDocumentTitle?: string };
 type PlannerData = { events: PlannerEvent[]; todos: PlannerTodo[] };
+
+function parseDocumentPlannerDraft(raw: string | null): DocumentPlannerDraft | null {
+  if (!raw?.trim()) return null;
+  const legacyTitle = raw.trim().slice(0, 240);
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { return { title: legacyTitle, description: "" }; }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return typeof value === "string" && value.trim() ? { title: value.trim().slice(0, 240), description: "" } : { title: legacyTitle, description: "" };
+  }
+  const draft = value as Record<string, unknown>;
+  if (typeof draft.title !== "string" || !draft.title.trim()) return null;
+  const sourceDocumentId = typeof draft.sourceDocumentId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(draft.sourceDocumentId) ? draft.sourceDocumentId : "";
+  const sourceDocumentTitle = typeof draft.sourceDocumentTitle === "string" ? draft.sourceDocumentTitle.trim().slice(0, 180) : "";
+  return {
+    title: draft.title.trim().slice(0, 240),
+    description: typeof draft.description === "string" ? draft.description.trim().slice(0, 1000) : "",
+    ...(sourceDocumentId && sourceDocumentTitle ? { sourceDocument: { id: sourceDocumentId, title: sourceDocumentTitle } } : {}),
+  };
+}
 const AI_PARTNER_OPTIONS: { id: PartnerRole; name: string }[] = [
   { id: PARTNER_ROLE_ID.guide, name: "AI Guide" },
   { id: PARTNER_ROLE_ID.planner, name: "AI Planner" },
@@ -128,10 +151,15 @@ function HomeContent() {
   const [calendarCursor, setCalendarCursor] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [selectedCalendarDate, setSelectedCalendarDate] = useState(() => toDateInputValue(new Date()));
   const [eventTitle, setEventTitle] = useState("");
+  const [eventDescription, setEventDescription] = useState("");
   const [eventDate, setEventDate] = useState(() => toDateInputValue(new Date()));
   const [eventTime, setEventTime] = useState("");
+  const [eventReminderAt, setEventReminderAt] = useState("");
+  const [eventSourceDocument, setEventSourceDocument] = useState<DocumentSource | null>(null);
   const [eventIdeaId, setEventIdeaId] = useState("");
   const [todoTitle, setTodoTitle] = useState("");
+  const [todoDescription, setTodoDescription] = useState("");
+  const [todoSourceDocument, setTodoSourceDocument] = useState<DocumentSource | null>(null);
   const [todoDueDate, setTodoDueDate] = useState("");
   const [todoReminderAt, setTodoReminderAt] = useState("");
   const [reminderError, setReminderError] = useState("");
@@ -146,6 +174,8 @@ function HomeContent() {
   const [ideasIncomplete, setIdeasIncomplete] = useState(false);
   const [storageError, setStorageError] = useState("");
   const [plannerNotice, setPlannerNotice] = useState("");
+  const [linkDocumentDraft, setLinkDocumentDraft] = useState<DocumentPlannerDraft | null>(null);
+  const [linkExistingTodoId, setLinkExistingTodoId] = useState("");
   const [noteWorkflowNotice, setNoteWorkflowNotice] = useState<{ message: string; undoTodoId?: string; error?: boolean } | null>(null);
   const [selectedIdea, setSelectedIdea] = useState<IdeaRecord | null>(null);
   const [ideaAnalysis, setIdeaAnalysis] = useState<{ ideaId: string; partnerRole: PartnerRole; result: PartnerResponse; saved: boolean } | null>(null);
@@ -276,25 +306,64 @@ function HomeContent() {
     if (params.get("continue") === "1" && workflowAccount.status === "loading") return;
     try {
       if (params.get("continue") === "1") {
-        const nextStep = window.localStorage.getItem("aiask-next-step-draft")?.trim();
+        const rawDocumentDraft = window.localStorage.getItem("aiask-document-todo-draft");
+        const documentDraft = parseDocumentPlannerDraft(rawDocumentDraft);
+        const nextStep = documentDraft?.title || window.localStorage.getItem("aiask-next-step-draft")?.trim();
         if (nextStep) {
           setTodoTitle(nextStep);
-          const rawOrigin = window.localStorage.getItem("aiask-next-step-origin");
-          const origin: unknown = rawOrigin ? JSON.parse(rawOrigin) : null;
-          if (origin && typeof origin === "object" && "ownerId" in origin && "conversationId" in origin &&
-            typeof origin.ownerId === "string" && typeof origin.conversationId === "string" &&
-            workflowAccount.status === "ready" && origin.ownerId === workflowOwnerId) {
-            setDraftOrigin({ ownerId: origin.ownerId, conversationId: origin.conversationId });
+          if (documentDraft) {
+            setTodoDescription(documentDraft.description);
+            setTodoSourceDocument(documentDraft.sourceDocument ?? null);
+            setDraftOrigin(null);
+            setTodoDueDate("");
+            setTodoReminderAt("");
+            setTodoIdeaId("");
+            if (params.get("linkDocument") === "1" && documentDraft.sourceDocument) {
+              setLinkDocumentDraft(documentDraft);
+              setLinkExistingTodoId("");
+            } else {
+              setLinkDocumentDraft(null);
+            }
+          } else {
+            const rawOrigin = window.localStorage.getItem("aiask-next-step-origin");
+            const origin: unknown = rawOrigin ? JSON.parse(rawOrigin) : null;
+            if (origin && typeof origin === "object" && "ownerId" in origin && "conversationId" in origin &&
+              typeof origin.ownerId === "string" && typeof origin.conversationId === "string" &&
+              workflowAccount.status === "ready" && origin.ownerId === workflowOwnerId) {
+              setDraftOrigin({ ownerId: origin.ownerId, conversationId: origin.conversationId });
+            }
+            window.localStorage.removeItem("aiask-next-step-origin");
           }
-          window.localStorage.removeItem("aiask-next-step-origin");
-          setPlannerNotice("Review this next step, choose a due date or reminder, then add it to your To-do list.");
-          window.localStorage.removeItem("aiask-next-step-draft");
+          setPlannerNotice(documentDraft
+            ? `Review this suggested action from “${documentDraft.sourceDocument?.title ?? "your document"}”. Edit its details and submit to create it.`
+            : "Review this next step, choose a due date or reminder, then add it to your To-do list.");
+          if (rawDocumentDraft) window.localStorage.removeItem("aiask-document-todo-draft");
+          else window.localStorage.removeItem("aiask-next-step-draft");
         }
       }
     } catch {
       setStorageError("We couldn’t read your next-step draft from this browser.");
     }
   }, [queryString, workflowAccount.status, workflowOwnerId]);
+
+  useEffect(() => {
+    if (new URLSearchParams(queryString).get("continueCalendar") !== "1") return;
+    try {
+      const draft = parseDocumentPlannerDraft(window.localStorage.getItem("aiask-document-calendar-draft"));
+      if (!draft) return;
+      setEventTitle(draft.title);
+      setEventDescription(draft.description);
+      setEventSourceDocument(draft.sourceDocument ?? null);
+      setEventDate("");
+      setEventTime("");
+      setEventReminderAt("");
+      setEventIdeaId("");
+      setPlannerNotice(`Review this suggested calendar entry from “${draft.sourceDocument?.title ?? "your document"}”. Set its date, time, and optional reminder, then submit to create it.`);
+      window.localStorage.removeItem("aiask-document-calendar-draft");
+    } catch {
+      setStorageError("We couldn’t read the Calendar draft from this browser.");
+    }
+  }, [queryString]);
 
   useEffect(() => {
     try {
@@ -739,26 +808,68 @@ function HomeContent() {
     return null;
   }
 
+  function linkSelectedTaskToDocument() {
+    const source = linkDocumentDraft?.sourceDocument;
+    const task = plannerData.todos.find(item => item.id === linkExistingTodoId);
+    if (!source || !task) return;
+    if (task.sourceDocumentId === source.id) {
+      setPlannerNotice("This To-do is already linked to the selected document.");
+      return;
+    }
+    if (task.sourceDocumentId) {
+      setPlannerNotice("This To-do is already linked to another document. Review it in the document library before changing its source.");
+      return;
+    }
+    const todos = plannerData.todos.map(item => item.id === task.id
+      ? { ...item, sourceDocumentId: source.id, sourceDocumentTitle: undefined }
+      : item);
+    const events = plannerData.events.map(item => item.id === task.eventId || item.todoId === task.id
+      ? { ...item, sourceDocumentId: source.id, sourceDocumentTitle: undefined }
+      : item);
+    if (persistPlanner({ todos, events })) {
+      setPlannerNotice(`“${task.title}” is now linked to “${source.title}”. The To-do remains in this browser.`);
+      setLinkDocumentDraft(null);
+      setLinkExistingTodoId("");
+    }
+  }
+
   function addCalendarEvent(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!eventTitle.trim() || !eventDate) return;
+    const reminderDate = eventReminderAt ? new Date(eventReminderAt) : null;
+    if (reminderDate && (!Number.isFinite(reminderDate.getTime()) || reminderDate.getTime() <= Date.now())) {
+      setReminderError("Choose a reminder time in the future.");
+      return;
+    }
+    const titleKey = eventTitle.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+    if (eventSourceDocument && plannerData.events.some(item => item.sourceDocumentId === eventSourceDocument.id && item.title.trim().replace(/\s+/g, " ").toLocaleLowerCase() === titleKey)) {
+      setPlannerNotice("A matching Calendar entry from this document already exists. Review it before adding another.");
+      return;
+    }
+    setReminderError("");
     const now = new Date().toISOString();
     const eventId = crypto.randomUUID();
     const todoId = crypto.randomUUID();
     const ownerId = workflowAccount.status === "ready" ? workflowAccount.userId ?? undefined : undefined;
-    const calendarEvent: PlannerEvent = { ownerId, id: eventId, todoId, ideaId: eventIdeaId || null, title: eventTitle.trim(), scheduledDate: eventDate, scheduledTime: eventTime || null, description: eventTitle.trim(), priority: eventPriority, createdAt: now, origin: "calendar" };
-    const linkedTodo: PlannerTodo = { ownerId, id: todoId, eventId, ideaId: eventIdeaId || null, title: eventTitle.trim(), dueDate: eventDate, status: "Open", priority: eventPriority, createdAt: now };
+    const calendarEvent: PlannerEvent = { ownerId, id: eventId, todoId, ideaId: eventIdeaId || null, title: eventTitle.trim(), scheduledDate: eventDate, scheduledTime: eventTime || null, description: eventDescription.trim() || eventTitle.trim(), priority: eventPriority, createdAt: now, origin: "calendar", sourceDocumentId: eventSourceDocument?.id };
+    const linkedTodo: PlannerTodo = { ownerId, id: todoId, eventId, ideaId: eventIdeaId || null, title: eventTitle.trim(), description: eventDescription.trim(), dueDate: eventDate, status: "Open", priority: eventPriority, createdAt: now, remindAt: reminderDate?.toISOString(), sourceDocumentId: eventSourceDocument?.id };
     if (persistPlanner({ events: [...plannerData.events, calendarEvent], todos: [...plannerData.todos, linkedTodo] })) {
       setSelectedCalendarDate(eventDate);
       setCalendarCursor(new Date(dateFromInput(eventDate).getFullYear(), dateFromInput(eventDate).getMonth(), 1));
-      setEventTitle(""); setEventTime(""); setEventIdeaId(""); setNewEventPriority("onTrack");
-      setPlannerNotice(`“${calendarEvent.title}” was added to Calendar and To-do for ${formatScheduleDate(eventDate)}.`);
+      window.dispatchEvent(new CustomEvent(TASK_CREATED_EVENT, { detail: { record: linkedTodo, createdAt: now } }));
+      setEventTitle(""); setEventDescription(""); setEventTime(""); setEventReminderAt(""); setEventSourceDocument(null); setEventIdeaId(""); setNewEventPriority("onTrack");
+      setPlannerNotice(`“${calendarEvent.title}” was added to Calendar and To-do for ${formatScheduleDate(eventDate)}${reminderDate ? `, with a reminder for ${formatDate(reminderDate.toISOString())}` : ""}.`);
     }
   }
 
   function addTodo(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!todoTitle.trim()) return;
+    const titleKey = todoTitle.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+    if (todoSourceDocument && plannerData.todos.some(item => item.sourceDocumentId === todoSourceDocument.id && item.title.trim().replace(/\s+/g, " ").toLocaleLowerCase() === titleKey)) {
+      setPlannerNotice("A matching To-do from this document already exists. Review it before adding another.");
+      return;
+    }
     const reminderDate = todoReminderAt ? new Date(todoReminderAt) : null;
     if (reminderDate && (!Number.isFinite(reminderDate.getTime()) || reminderDate.getTime() <= Date.now())) {
       setReminderError("Choose a reminder time in the future.");
@@ -770,8 +881,8 @@ function HomeContent() {
     const eventId = todoDueDate ? crypto.randomUUID() : null;
     const ownerId = workflowAccount.status === "ready" ? workflowAccount.userId ?? undefined : undefined;
     const hasDraftOrigin = workflowAccount.status === "ready" && workflowAccount.userId === draftOrigin?.ownerId;
-    const todo: PlannerTodo = { ownerId, originConversationId: hasDraftOrigin ? draftOrigin?.conversationId : undefined, id: todoId, eventId, ideaId: todoIdeaId || null, title: todoTitle.trim(), dueDate: todoDueDate, status: "Open", priority: todoPriority, createdAt: now, updatedAt: now, remindAt: reminderDate?.toISOString() };
-    const calendarEvent: PlannerEvent | null = eventId ? { ownerId, id: eventId, todoId, ideaId: todoIdeaId || null, title: todo.title, scheduledDate: todoDueDate, scheduledTime: null, description: todo.title, priority: todoPriority, createdAt: now, origin: "task-deadline" } : null;
+    const todo: PlannerTodo = { ownerId, originConversationId: hasDraftOrigin ? draftOrigin?.conversationId : undefined, id: todoId, eventId, ideaId: todoIdeaId || null, title: todoTitle.trim(), description: todoDescription.trim(), dueDate: todoDueDate, status: "Open", priority: todoPriority, createdAt: now, updatedAt: now, remindAt: reminderDate?.toISOString(), sourceDocumentId: todoSourceDocument?.id };
+    const calendarEvent: PlannerEvent | null = eventId ? { ownerId, id: eventId, todoId, ideaId: todoIdeaId || null, title: todo.title, scheduledDate: todoDueDate, scheduledTime: null, description: todo.description || todo.title, priority: todoPriority, createdAt: now, origin: "task-deadline", sourceDocumentId: todoSourceDocument?.id } : null;
     const nextPlanner: PlannerData = {
       todos: [todo, ...plannerData.todos],
       events: calendarEvent ? [...plannerData.events, calendarEvent] : plannerData.events,
@@ -783,7 +894,7 @@ function HomeContent() {
         setSelectedCalendarDate(todoDueDate);
         setCalendarCursor(new Date(dueDate.getFullYear(), dueDate.getMonth(), 1));
       }
-      setTodoTitle(""); setDraftOrigin(null); setTodoDueDate(""); setTodoReminderAt(""); setTodoIdeaId(""); setNewTodoPriority("onTrack");
+      setTodoTitle(""); setTodoDescription(""); setTodoSourceDocument(null); setDraftOrigin(null); setTodoDueDate(""); setTodoReminderAt(""); setTodoIdeaId(""); setNewTodoPriority("onTrack");
       setPlannerNotice(calendarEvent
         ? `“${todo.title}” was added to To-do and Calendar for ${formatScheduleDate(todoDueDate)}${reminderDate ? `, with a reminder for ${formatDate(reminderDate.toISOString())}` : ""}.`
         : `“${todo.title}” was added to To-do${reminderDate ? `, with a reminder for ${formatDate(reminderDate.toISOString())}` : ". Add a due date to also place it on Calendar."}`);
@@ -1000,7 +1111,8 @@ function HomeContent() {
         <button className={view === "calendar" ? "nav-cta active" : "nav-cta"} onClick={() => { setView("calendar"); setMenuOpen(false); }}><CalendarDays size={15}/> Calendar</button>
         <button className={view === "todos" ? "nav-cta active" : "nav-cta"} onClick={() => { setView("todos"); setMenuOpen(false); }}><Check size={15}/> To-do{openTodos.length > 0 && <span className="nav-count">{openTodos.length}</span>}</button>
         <button className={view === "inbox" ? "nav-cta active" : "nav-cta"} onClick={() => { setView(view === "inbox" ? "home" : "inbox"); setSelectedIdea(null); setMenuOpen(false); }}><Inbox size={15}/> Notes &amp; Ideas{ideas.length > 0 && <span className="nav-count">{ideas.length}</span>}</button>
-        <button className="nav-cta share-cta" onClick={() => { setIdeaTypeDraft("Quick Note"); setCaptureOpen(true); }}>Quick capture <Plus size={15} /></button>
+        <button className={view === "documents" ? "nav-cta active" : "nav-cta"} onClick={() => { setView("documents"); setMenuOpen(false); }}><FileText size={15}/> Letters &amp; Documents</button>
+        <button className="nav-cta share-cta" onClick={() => { setIdeaTypeDraft("Quick Note"); setCaptureOpen(true); }}>Quick Capture <Plus size={15} /></button>
         <AccountControl />
       </nav>
     </header>
@@ -1013,10 +1125,10 @@ function HomeContent() {
     </aside>}
 
     {!hydrated || (isSupabaseConfigured() && !authReady) ? <div className="wrap auth-gate-loading" role="status">Checking your sign-in…</div> : <>
-    {isSupabaseConfigured() && (view !== "home" || captureOpen) && <div className="wrap local-data-notice" role="status"><b>Local demo data</b><span>Your Notes &amp; Ideas, To-do, and Calendar records still live in this browser. They are not yet synced to your account.</span></div>}
+    {isSupabaseConfigured() && view !== "documents" && (view !== "home" || captureOpen) && <div className="wrap local-data-notice" role="status"><b>Local demo data</b><span>Notes &amp; Ideas, To-do, and Calendar records remain in this browser and are not synced to your account. Letters &amp; Documents use your signed-in private Supabase library.</span></div>}
     {(view === "calendar" || view === "todos") && <TaskCreationBridge />}
 
-    {view === "inbox" ? (
+    {view === "documents" ? <DocumentLibrary openCapture={searchParams.get("captureDocument") === "1"} openDocumentId={searchParams.get("documentId") ?? undefined} ownerId={workflowOwnerId} authState={workflowAccount.status} /> : view === "inbox" ? (
       <section className="idea-box wrap">
         <button className="inbox-back" type="button" onClick={() => { setView("home"); setSelectedIdea(null); setOpenIdeaMenuId(null); }}><ArrowLeft size={15}/> Back to AIASK</button>
 
@@ -1118,19 +1230,21 @@ function HomeContent() {
               {lateDays > 0 && <span className="todo-overdue-status">{lateDays} {lateDays === 1 ? "day" : "days"} overdue</span>}
               {event.description !== event.title && <p>{event.description}</p>}
               {event.ideaId && <small>Linked to: {ideas.find(item => item.id === event.ideaId)?.text.slice(0, 58) ?? "Saved idea"}</small>}
+              {event.sourceDocumentId && <small><Link href={`/?view=documents&documentId=${encodeURIComponent(event.sourceDocumentId)}`}>Open source document</Link></small>}
               <div className="agenda-event-actions">
                 <button onClick={() => linkedTodo && togglePlannerTodo(linkedTodo.id)}><Check size={13}/> {linkedTodo?.status ?? "Open"} to-do</button>
                 <button aria-label="Delete calendar event" onClick={() => deleteCalendarEvent(event.id)}><Trash2 size={13}/></button>
               </div>
             </article>;
           })}
-          <form className="planner-form" onSubmit={addCalendarEvent}><div className="section-kicker">ADD TO CALENDAR</div><label htmlFor="event-title">What’s happening?</label><input id="event-title" required value={eventTitle} onChange={event => setEventTitle(event.target.value)} placeholder="e.g. Call the gallery"/><div className="planner-form-row"><label>Date<input type="date" required value={eventDate} onChange={event => setEventDate(event.target.value)}/></label><label>Time<input type="time" value={eventTime} onChange={event => setEventTime(event.target.value)}/></label></div><label htmlFor="event-idea">Related idea <span>Optional</span></label><select id="event-idea" value={eventIdeaId} onChange={event => setEventIdeaId(event.target.value)}><option value="">No linked idea</option>{ideas.map(item => <option key={item.id} value={item.id}>{item.text.replace(/\s+/g, " ").slice(0, 60)}</option>)}</select><PriorityControl value={eventPriority} onChange={setNewEventPriority} label="Priority for new calendar event" className="priority-form-control"/><button className="button button-dark" type="submit"><Plus size={14}/> Add event &amp; linked to-do</button></form>
+          <form className="planner-form" onSubmit={addCalendarEvent}><div className="section-kicker">ADD TO CALENDAR</div><label htmlFor="event-title">What’s happening?</label><input id="event-title" required value={eventTitle} onChange={event => setEventTitle(event.target.value)} placeholder="e.g. Call the gallery"/><div className="planner-form-row"><label>Date<input type="date" required value={eventDate} onChange={event => setEventDate(event.target.value)}/></label><label>Time<input type="time" value={eventTime} onChange={event => setEventTime(event.target.value)}/></label></div><label htmlFor="event-description">Description <span>Optional</span></label><textarea id="event-description" value={eventDescription} onChange={event => setEventDescription(event.target.value)} rows={3} placeholder="Add details for this calendar entry"/>{eventSourceDocument && <p className="planner-source-reference">Source document: <Link href={`/?view=documents&documentId=${encodeURIComponent(eventSourceDocument.id)}`}>{eventSourceDocument.title}</Link>. Only its reference is linked.</p>}<label htmlFor="event-reminder">Remind me <span>Optional</span></label><input id="event-reminder" type="datetime-local" min={toDateTimeLocalValue(new Date(Date.now() + 60_000))} value={eventReminderAt} onChange={event => { setEventReminderAt(event.target.value); setReminderError(""); }}/><small className="planner-sync-hint">In-app reminders run while AIASK is open.</small>{reminderError && <p className="reminder-error" role="alert">{reminderError}</p>}<label htmlFor="event-idea">Related idea <span>Optional</span></label><select id="event-idea" value={eventIdeaId} onChange={event => setEventIdeaId(event.target.value)}><option value="">No linked idea</option>{ideas.map(item => <option key={item.id} value={item.id}>{item.text.replace(/\s+/g, " ").slice(0, 60)}</option>)}</select><PriorityControl value={eventPriority} onChange={setNewEventPriority} label="Priority for new calendar event" className="priority-form-control"/><button className="button button-dark" type="submit"><Plus size={14}/> Add event &amp; linked to-do</button></form>
         </aside></div>
     </section> : view === "todos" ? <section className="planner-page wrap">
       <button className="planner-back" onClick={() => setView("home")}><ArrowLeft size={14}/> Back to AIASK</button><div className="planner-page-heading"><div><div className="section-kicker">SMALL STEPS, KEPT VISIBLE</div><h1>Your <em>To-do list.</em></h1><p>Set a due date to add the task to Calendar automatically. Add a reminder and AIASK will bring the next step back at the time you choose.</p></div><div className="planner-total"><Check size={17}/><span>{openTodos.length} open</span></div></div>
       <PlannerAIChat key={workflowOwnerId ?? "local"} scope="todos" context={todosAIContext} userId={workflowOwnerId} onConfirm={(change, conversationId) => confirmAIPlannerChange(change, conversationId)} />
       {plannerNotice && <div className="planner-sync-notice" role="status" aria-live="polite"><Check size={15}/><span>{plannerNotice}</span><button type="button" onClick={() => setPlannerNotice("")} aria-label="Dismiss notification"><X size={14}/></button></div>}
-      <div className="todo-layout"><form className="planner-form todo-create-form" onSubmit={addTodo}><div className="section-kicker">ADD A TO-DO</div>{openTodos.length === 0 && doneTodos.length === 0 && <p className="reminder-first-use">Start with one real task. AIASK can remind you when it is time to take the next step.</p>}<label htmlFor="todo-title">What needs doing?</label><input id="todo-title" required value={todoTitle} onChange={event => setTodoTitle(event.target.value)} placeholder="Write a clear next step"/><label htmlFor="todo-date">Due date <span>Optional</span></label><input id="todo-date" type="date" value={todoDueDate} onChange={event => setTodoDueDate(event.target.value)}/><small className="planner-sync-hint">{todoDueDate ? "This task will also appear on Calendar as an all-day item." : "Choose a date to link this task to Calendar."}</small><label htmlFor="todo-reminder">Remind me <span>Optional</span></label><input id="todo-reminder" type="datetime-local" min={toDateTimeLocalValue(new Date(Date.now() + 60_000))} value={todoReminderAt} onChange={event => { setTodoReminderAt(event.target.value); setReminderError(""); }}/><small className="planner-sync-hint">AIASK checks reminders while this page is open. You can enable browser notifications for a desktop alert.</small><div className="notification-permission-row">{notificationPermission === "default" && <button type="button" onClick={enableBrowserNotifications}><Bell size={13}/> Enable browser notifications</button>}{notificationPermission === "granted" && <span><Bell size={13}/> Browser notifications enabled</span>}{notificationPermission === "denied" && <span>Browser notifications are blocked. In-app reminders still work while AIASK is open.</span>}{notificationPermission === "unsupported" && <span>In-app reminders work while AIASK is open.</span>}</div>{reminderError && <p className="reminder-error" role="alert">{reminderError}</p>}<label htmlFor="todo-idea">Related idea <span>Optional</span></label><select id="todo-idea" value={todoIdeaId} onChange={event => setTodoIdeaId(event.target.value)}><option value="">No linked idea</option>{ideas.map(item => <option key={item.id} value={item.id}>{item.text.replace(/\s+/g, " ").slice(0, 60)}</option>)}</select><PriorityControl value={todoPriority} onChange={setNewTodoPriority} label="Priority for new to-do" className="priority-form-control"/><button className="button button-dark" type="submit"><Plus size={14}/> {todoDueDate ? "Add to-do & Calendar" : "Add to-do"}</button></form>
+      {linkDocumentDraft?.sourceDocument && <section className="document-link-review" aria-labelledby="document-link-title"><div><span className="section-kicker">DOCUMENT FOLLOW-UP</span><h2 id="document-link-title">Link an existing To-do</h2><p>Selected source: <Link href={`/?view=documents&documentId=${encodeURIComponent(linkDocumentDraft.sourceDocument.id)}`}>{linkDocumentDraft.sourceDocument.title}</Link>. This stores only the document reference on the browser-based task.</p></div>{plannerData.todos.length === 0 ? <p className="planner-sync-hint">There are no To-dos to link yet.</p> : <><label htmlFor="link-existing-todo">Choose a To-do</label><select id="link-existing-todo" value={linkExistingTodoId} onChange={event => setLinkExistingTodoId(event.target.value)}><option value="">Choose a task</option>{plannerData.todos.map(item => <option key={item.id} value={item.id} disabled={Boolean(item.sourceDocumentId && item.sourceDocumentId !== linkDocumentDraft.sourceDocument?.id)}>{item.title} · {item.status}{item.sourceDocumentId ? " · already linked" : ""}</option>)}</select><div className="document-link-actions"><button type="button" className="button button-dark" disabled={!linkExistingTodoId} onClick={linkSelectedTaskToDocument}>Link selected task</button><button type="button" className="button button-outline-light" onClick={() => { setLinkDocumentDraft(null); setLinkExistingTodoId(""); setTodoSourceDocument(null); }}>Cancel</button></div></>}</section>}
+      <div className="todo-layout"><form className="planner-form todo-create-form" onSubmit={addTodo}><div className="section-kicker">ADD A TO-DO</div>{openTodos.length === 0 && doneTodos.length === 0 && <p className="reminder-first-use">Start with one real task. AIASK can remind you when it is time to take the next step.</p>}<label htmlFor="todo-title">What needs doing?</label><input id="todo-title" required value={todoTitle} onChange={event => setTodoTitle(event.target.value)} placeholder="Write a clear next step"/><label htmlFor="todo-description">Description <span>Optional</span></label><textarea id="todo-description" value={todoDescription} onChange={event => setTodoDescription(event.target.value)} rows={3} placeholder="Add details for this task"/>{todoSourceDocument && <p className="planner-source-reference">Source document: <Link href={`/?view=documents&documentId=${encodeURIComponent(todoSourceDocument.id)}`}>{todoSourceDocument.title}</Link>. Only its reference is linked.</p>}<label htmlFor="todo-date">Due date <span>Optional</span></label><input id="todo-date" type="date" value={todoDueDate} onChange={event => setTodoDueDate(event.target.value)}/><small className="planner-sync-hint">{todoDueDate ? "This task will also appear on Calendar as an all-day item." : "Choose a date to link this task to Calendar."}</small><label htmlFor="todo-reminder">Remind me <span>Optional</span></label><input id="todo-reminder" type="datetime-local" min={toDateTimeLocalValue(new Date(Date.now() + 60_000))} value={todoReminderAt} onChange={event => { setTodoReminderAt(event.target.value); setReminderError(""); }}/><small className="planner-sync-hint">AIASK checks reminders while this page is open. You can enable browser notifications for a desktop alert.</small><div className="notification-permission-row">{notificationPermission === "default" && <button type="button" onClick={enableBrowserNotifications}><Bell size={13}/> Enable browser notifications</button>}{notificationPermission === "granted" && <span><Bell size={13}/> Browser notifications enabled</span>}{notificationPermission === "denied" && <span>Browser notifications are blocked. In-app reminders still work while AIASK is open.</span>}{notificationPermission === "unsupported" && <span>In-app reminders work while AIASK is open.</span>}</div>{reminderError && <p className="reminder-error" role="alert">{reminderError}</p>}<label htmlFor="todo-idea">Related idea <span>Optional</span></label><select id="todo-idea" value={todoIdeaId} onChange={event => setTodoIdeaId(event.target.value)}><option value="">No linked idea</option>{ideas.map(item => <option key={item.id} value={item.id}>{item.text.replace(/\s+/g, " ").slice(0, 60)}</option>)}</select><PriorityControl value={todoPriority} onChange={setNewTodoPriority} label="Priority for new to-do" className="priority-form-control"/><button className="button button-dark" type="submit"><Plus size={14}/> {todoDueDate ? "Add to-do & Calendar" : "Add to-do"}</button></form>
         <div className="todo-list-panel">
           <div className="todo-list-heading"><div><div className="section-kicker">UP NEXT</div><h2>{openTodos.length} open {openTodos.length === 1 ? "task" : "tasks"}</h2></div></div>
           {openTodos.length === 0 && doneTodos.length === 0 ? <div className="todo-empty"><span className="empty-icon"><Check size={21}/></span><h3>Your list is clear.</h3><p>Add a next step or create one from a calendar event.</p></div> : <>
@@ -1147,6 +1261,8 @@ function HomeContent() {
                     {todo.eventId && <span>Calendar linked</span>}
                     {todo.ideaId && <span>Idea: {ideas.find(item => item.id === todo.ideaId)?.text.replace(/\s+/g, " ").slice(0, 45) ?? "Saved idea"}</span>}
                   </div>
+                  {todo.description && <p className="todo-description">{todo.description}</p>}
+                  {todo.sourceDocumentId && <Link className="planner-document-source-link" href={`/?view=documents&documentId=${encodeURIComponent(todo.sourceDocumentId)}`}>Open source document</Link>}
                 </div>
                 <PriorityControl value={todo.priority} onChange={value => setTodoPriority(todo.id, value)} label={`Priority for ${todo.title}`}/>
                 <button className="todo-delete" aria-label="Delete to-do" onClick={() => deleteTodo(todo.id)}><Trash2 size={14}/></button>
@@ -1252,7 +1368,7 @@ function HomeContent() {
       </div>;
     })()}
 
-    {captureOpen && <div className="modal-backdrop" onClick={closeCapture}><section className="capture-modal" role="dialog" aria-modal="true" aria-labelledby="capture-title" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={closeCapture} aria-label="Close"><X size={18}/></button>{saved ? <div className="saved-state"><div className="saved-check"><Check size={23}/></div><div className="section-kicker">NOTE SAVED</div><h2>There. It’s out of your head.</h2><p>Your note is saved in Notes &amp; Ideas and will be here when you return.</p><button className="button button-dark" onClick={() => { closeCapture(); setView("inbox"); }}>Open Notes &amp; Ideas <ArrowRight size={15}/></button></div> : <><div className="modal-symbol"><Sparkles size={20}/></div><div className="section-kicker">QUICK CAPTURE</div><h2 id="capture-title">{editingIdeaId ? "Edit your note." : "What’s on your mind?"}</h2><p className="modal-copy">Capture it first. Choose a record type when you are ready.</p><form onSubmit={editingIdeaId ? saveEdit : saveIdea}><label htmlFor="idea-input">NOTE</label><textarea autoFocus id="idea-input" value={idea} onChange={e => setIdea(e.target.value)} placeholder="What's on your mind? Capture a note, thought, or idea…" rows={4}/><label className="note-type-control" htmlFor="idea-type-draft">Record type<select id="idea-type-draft" value={ideaTypeDraft} disabled={ideasIncomplete} onChange={event => setIdeaTypeDraft(event.target.value as NoteType)}>{(["Quick Note", "Idea", "Reflection", "Action Item"] as NoteType[]).map(type => <option key={type} value={type}>{type}</option>)}</select></label>{storageError && <p className="storage-error" role="alert">{storageError}</p>}<div className="form-foot"><span>New notes start as Quick Notes. You can change this later.</span><button className="button button-dark" type="submit" disabled={!idea.trim() || !storageReady || ideasIncomplete}>{editingIdeaId ? "Save changes" : "Save note"} <Send size={14}/></button></div></form></>}</section></div>}
+    {captureOpen && <div className="modal-backdrop" onClick={closeCapture}><section className="capture-modal" role="dialog" aria-modal="true" aria-labelledby="capture-title" onClick={e => e.stopPropagation()}><button className="modal-close" onClick={closeCapture} aria-label="Close"><X size={18}/></button>{saved ? <div className="saved-state"><div className="saved-check"><Check size={23}/></div><div className="section-kicker">NOTE SAVED</div><h2>There. It’s out of your head.</h2><p>Your note is saved in Notes &amp; Ideas and will be here when you return.</p><button className="button button-dark" onClick={() => { closeCapture(); setView("inbox"); }}>Open Notes &amp; Ideas <ArrowRight size={15}/></button></div> : <><div className="modal-symbol"><Sparkles size={20}/></div><div className="section-kicker">QUICK CAPTURE</div><h2 id="capture-title">{editingIdeaId ? "Edit your note." : "What’s on your mind?"}</h2><p className="modal-copy">Capture it first. Choose a record type when you are ready.</p><form onSubmit={editingIdeaId ? saveEdit : saveIdea}><label htmlFor="idea-input">NOTE</label><textarea autoFocus id="idea-input" value={idea} onChange={e => setIdea(e.target.value)} placeholder="What's on your mind? Capture a note, thought, or idea…" rows={4}/><label className="note-type-control" htmlFor="idea-type-draft">Record type<select id="idea-type-draft" value={ideaTypeDraft} disabled={ideasIncomplete} onChange={event => setIdeaTypeDraft(event.target.value as NoteType)}>{(["Quick Note", "Idea", "Reflection", "Action Item"] as NoteType[]).map(type => <option key={type} value={type}>{type}</option>)}</select></label>{storageError && <p className="storage-error" role="alert">{storageError}</p>}<div className="form-foot"><span>New notes start as Quick Notes. You can change this later.</span><button className="button button-dark" type="submit" disabled={!idea.trim() || !storageReady || ideasIncomplete}>{editingIdeaId ? "Save changes" : "Save note"} <Send size={14}/></button></div></form></>}{!saved && !editingIdeaId && <button type="button" className="capture-document-link" onClick={() => { setCaptureOpen(false); router.push("/?view=documents&captureDocument=1"); }}><FileText size={14}/> Capture a letter, photo, or PDF</button>}</section></div>}
 
     {proactiveOpen && <div className="modal-backdrop proactive-backdrop" onClick={() => setProactiveOpen(false)}><section className="proactive-modal checkin-modal checkin-modal-v2" role="dialog" aria-modal="true" aria-label="Idea progress check-in" onClick={event => event.stopPropagation()}>
       <button type="button" className="modal-close checkin-modal-close" onClick={() => setProactiveOpen(false)} aria-label="Close"><X size={18}/></button>

@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const privateViews = new Set(["inbox", "calendar", "todos"]);
+const privateViews = new Set(["inbox", "calendar", "todos", "documents"]);
 
 function isPrivateRequest(request: NextRequest) {
   if (request.nextUrl.pathname === "/workspace" || request.nextUrl.pathname.startsWith("/workspace/")) return true;

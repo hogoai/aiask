@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { defaultLocale } from "../../i18n/config";
-import { ArrowRight, ArrowUpRight, BookOpen, CalendarDays, Check, ChevronDown, Circle, Compass, Lightbulb, ListTodo, MessageSquare, Search, Sparkles, TrendingUp, X } from "lucide-react";
+import { ArrowRight, ArrowUpRight, BookOpen, CalendarDays, Check, ChevronDown, Circle, Compass, FileText, Lightbulb, ListTodo, MessageSquare, Search, Sparkles, TrendingUp, X } from "lucide-react";
 import SiteNavigation from "../SiteNavigation";
 import MarkdownContent from "../partners/MarkdownContent";
 import type { AIConversation, ConversationListItem } from "../../lib/ai/conversations";
@@ -18,9 +18,15 @@ import { WorkflowConnect } from "./WorkflowConnection";
 import { useWorkspaceAccount } from "./useWorkspaceAccount";
 import type { WorkflowCoachRequest, WorkflowConversationLink } from "../../lib/proactive/coach";
 import { emptyIdeas, emptyPlanner, IDEA_KEY, localDateKey, PLANNER_KEY, readWorkspaceRecords, toggleStoredTodo, type IdeaRecord, type IdeaStatus, type PlannerTodo, type WorkspaceRecords } from "../../lib/workspace/browser-records";
+import { listPrivateDocumentSummaries, type DocumentSummary } from "../../lib/documents/client";
+import { isSupabaseConfigured } from "../../lib/supabase/config";
 
 type WorkspaceTab = "Overview" | "Ideas" | "Actions" | "Outcomes" | "Conversations";
 type IdeaFilter = "All" | IdeaStatus;
+type DocumentSummaryState =
+  | { status: "loading" }
+  | { status: "ready"; ownerId: string; documents: DocumentSummary[] }
+  | { status: "sign_in" | "unavailable" | "error"; message: string };
 
 const tabs: { label: WorkspaceTab; icon: typeof Compass }[] = [
   { label: "Overview", icon: Compass },
@@ -72,6 +78,10 @@ export default function WorkspacePage() {
   }, [workflowRequest]);
   const tReview = useTranslations("weeklyReview");
   const [records, setRecords] = useState<WorkspaceRecords | null>(null);
+  const [documentSummary, setDocumentSummary] = useState<DocumentSummaryState>({ status: "loading" });
+  const visibleDocumentSummary: DocumentSummaryState = documentSummary.status === "ready" && documentSummary.ownerId !== ownerId
+    ? { status: "loading" }
+    : documentSummary;
   const ready = records !== null;
   const ideas = records?.ideas.data ?? emptyIdeas;
   const planner = records?.planner.data ?? emptyPlanner;
@@ -106,6 +116,36 @@ export default function WorkspacePage() {
       window.removeEventListener("focus", refresh);
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    if (account.status === "loading") {
+      setDocumentSummary({ status: "loading" });
+      return () => { active = false; };
+    }
+    if (account.status === "unavailable") {
+      setDocumentSummary({ status: "sign_in", message: "Sign in to view your private document library." });
+      return () => { active = false; };
+    }
+    if (!ownerId) {
+      setDocumentSummary({ status: "unavailable", message: isSupabaseConfigured() ? "Sign in to view your private document library." : "Connect Supabase to enable private document storage." });
+      return () => { active = false; };
+    }
+    setDocumentSummary({ status: "loading" });
+    void listPrivateDocumentSummaries(ownerId).then(documents => {
+      if (active) setDocumentSummary({ status: "ready", ownerId, documents });
+    }).catch(loadError => {
+      if (!active) return;
+      const message = loadError instanceof Error ? loadError.message : "Your document summary could not be loaded.";
+      setDocumentSummary({
+        status: "error",
+        message: /public\.documents|schema cache/i.test(message)
+          ? "Private document storage is not ready. Apply the existing 0005 migration in Supabase, then reload."
+          : message,
+      });
+    });
+    return () => { active = false; };
+  }, [account.status, ownerId]);
 
   useEffect(() => {
     if (tab !== "Conversations") return;
@@ -318,7 +358,7 @@ export default function WorkspacePage() {
       <Link className="workspace-brand" href="/" aria-label="AIASK home"><span className="workspace-brand-mark"><Sparkles size={16} /></span><span>aiask<span>.</span></span></Link>
       <div className="workspace-rail-label">YOUR SPACE</div>
       <nav aria-label="Workspace sections" className="workspace-rail-nav">
-        {tabs.map(({ label, icon: Icon }) => <button key={label} type="button" className={tab === label ? "workspace-rail-link active" : "workspace-rail-link"} onClick={() => setTab(label)} aria-current={tab === label ? "page" : undefined}>
+        {tabs.map(({ label, icon: Icon }) => <Fragment key={label}><button type="button" className={tab === label ? "workspace-rail-link active" : "workspace-rail-link"} onClick={() => setTab(label)} aria-current={tab === label ? "page" : undefined}>
           <Icon size={16} /><span>{label === "Ideas" ? "Notes & Ideas" : label}</span>
           {ready && label === "Ideas" && <span className="workspace-rail-counts"><small className="workspace-rail-count" aria-label={`Saved thoughts: ${ideas.length}`} title={`Saved thoughts: ${ideas.length}`}>{ideas.length}</small></span>}
           {ready && label === "Actions" && <span className="workspace-rail-counts">
@@ -327,17 +367,20 @@ export default function WorkspacePage() {
           </span>}
           {ready && label === "Outcomes" && <span className="workspace-rail-counts"><small className="workspace-rail-count" aria-label={`Completed: ${completedCount}`} title={`Completed: ${completedCount}`}>{completedCount}</small></span>}
           {label === "Conversations" && conversationStatus === "ready" && <span className="workspace-rail-counts"><small className="workspace-rail-count" aria-label={`Conversations: ${conversations.length}`} title={`Conversations: ${conversations.length}`}>{conversations.length}</small></span>}
-        </button>)}
+        </button>{label === "Ideas" && <Link className="workspace-rail-link workspace-documents-link" href="/?view=documents" title="Letters & Documents" aria-label="Letters & Documents">
+          <FileText size={16} /><span>Letters &amp; Documents</span>
+          {visibleDocumentSummary.status === "ready" && <span className="workspace-rail-counts"><small className="workspace-rail-count" aria-label={`Saved documents: ${visibleDocumentSummary.documents.length}`} title={`Saved documents: ${visibleDocumentSummary.documents.length}`}>{visibleDocumentSummary.documents.length}</small></span>}
+        </Link>}</Fragment>)}
       </nav>
       <div className="workspace-rail-bottom"><div className="workspace-rail-note"><span><Sparkles size={14} /></span><p>A flexible space for thoughts at every stage.</p></div><Link href="/" className="workspace-back-link">Back to AIASK <ArrowUpRight size={14} /></Link></div>
     </aside>
 
     <div className="workspace-main">
-      <div className="workspace-local-data-note" role="note"><b>Data &amp; privacy</b><span>AI conversations require sign-in and the Supabase conversation migration. Ideas, actions, and calendar plans remain browser-only demo data.</span></div>
+      <div className="workspace-local-data-note" role="note"><b>Data &amp; privacy</b><span>Letters &amp; Documents use your signed-in private Supabase library. AI conversations require sign-in and the Supabase conversation migration. Notes &amp; Ideas, To-do, and Calendar remain browser-only demo data.</span></div>
       <SiteNavigation active="workspace" />
 
       <div className="workspace-content">
-        <div className="workspace-heading-row"><div><p className="workspace-eyebrow">A SPACE FOR WHAT’S TAKING SHAPE</p><h1>My Workspace<span>.</span></h1><p className="workspace-subtitle">Your ideas, conversations and knowledge — all in one private space.</p></div><Link className="workspace-capture-link workspace-header-capture" href="/#top"><Lightbulb size={14} /><span>Capture a thought</span><ArrowUpRight size={13} /></Link></div>
+        <div className="workspace-heading-row"><div><p className="workspace-eyebrow">A SPACE FOR WHAT’S TAKING SHAPE</p><h1>My Workspace<span>.</span></h1><p className="workspace-subtitle">Your ideas, documents, conversations and knowledge — organized in one workspace.</p></div><Link className="workspace-capture-link workspace-header-capture" href="/?capture=1"><Lightbulb size={14} /><span>Quick Capture</span><ArrowUpRight size={13} /></Link></div>
 
 
 
@@ -345,6 +388,14 @@ export default function WorkspacePage() {
         {!ready ? <div className="workspace-loading"><span className="workspace-loading-dot" /> Gathering your thoughts and plans…</div> : <>
           {tab === "Overview" && <>
       {records && <DailyBriefing records={records} />}
+      <section className="workspace-panel document-summary-card" aria-labelledby="workspace-documents-title">
+        <div className="workspace-panel-heading"><div><span className="panel-kicker">PRIVATE LIBRARY</span><h2 id="workspace-documents-title">Letters &amp; Documents{documentSummary.status === "ready" && <small className="document-summary-count">{documentSummary.documents.length}</small>}</h2></div><Link className="panel-link" href="/?view=documents">Open document library <ArrowRight size={13} /></Link></div>
+        {visibleDocumentSummary.status === "loading" ? <p className="workspace-panel-empty" role="status">Loading your saved documents…</p>
+          : visibleDocumentSummary.status === "ready" ? visibleDocumentSummary.documents.length === 0
+            ? <div className="document-summary-empty"><p>Your private document library is ready.</p><Link href="/?view=documents&captureDocument=1">Start a Quick Capture <ArrowRight size={13} /></Link></div>
+            : <div className="document-summary-list">{visibleDocumentSummary.documents.slice(0, 3).map(item => <Link className="document-summary-item" key={item.id} href={`/?view=documents&documentId=${encodeURIComponent(item.id)}`}><span className="document-summary-icon"><FileText size={15} /></span><span><strong>{item.title}</strong><small>{item.classification} · {formatDate(item.created_at, { dateStyle: "medium" })}</small></span><ArrowRight size={14} /></Link>)}</div>
+          : <p className="workspace-panel-empty" role={visibleDocumentSummary.status === "error" ? "alert" : "status"}>{visibleDocumentSummary.message}</p>}
+      </section>
       <ProactiveInsights account={account} onDiscuss={setCoachRequest} conversationLink={conversationLink} />
             <div className="workspace-overview-grid">
               <section className="workspace-panel motion-panel">
@@ -361,7 +412,7 @@ export default function WorkspacePage() {
                     <h3>{ideas.length === 0 ? "Start wherever you are." : "Nothing in motion right now."}</h3>
                     <p>{ideas.length === 0 ? "Save a question, a small task, or a big ambition. It does not need a plan yet." : "Your completed ideas are in Progress & outcomes. Leave space open until you are ready to pick something up."}</p>
                     {ideas.length === 0 ? (
-                      <Link href="/#top">Capture a thought <ArrowRight size={13} /></Link>
+                      <Link href="/?capture=1">Quick Capture <ArrowRight size={13} /></Link>
                     ) : (
                       <button type="button" onClick={() => setTab("Outcomes")}>Review progress <ArrowRight size={13} /></button>
                     )}
@@ -395,7 +446,7 @@ export default function WorkspacePage() {
               </section>
 
               <section className="workspace-panel workspace-calendar-panel"><div className="workspace-panel-heading"><div><span className="panel-kicker">MAKING ROOM</span><h2>Coming up</h2></div><CalendarDays size={16} /></div>
-                {upcomingEvents.length === 0 ? <p className="workspace-panel-empty">No calendar plans ahead. Keep your schedule open until something needs a time.</p> : <div className="coming-list">{upcomingEvents.slice(0, 4).map(event => <div className="coming-event" key={event.id}><time>{formatEventDate(event.scheduledDate)}</time><div><b>{event.title}</b><small>{event.scheduledTime ?? "Any time"}{event.ideaId && ideas.find(idea => idea.id === event.ideaId) ? ` · ${ideas.find(idea => idea.id === event.ideaId)?.text}` : ""}</small><WorkflowConnect type="calendar" id={event.id} /></div></div>)}</div>}
+                {upcomingEvents.length === 0 ? <p className="workspace-panel-empty">No calendar plans ahead. Keep your schedule open until something needs a time.</p> : <div className="coming-list">{upcomingEvents.slice(0, 4).map(event => <div className="coming-event" key={event.id}><time>{formatEventDate(event.scheduledDate)}</time><div><b>{event.title}</b><small>{event.scheduledTime ?? "Any time"}{event.ideaId && ideas.find(idea => idea.id === event.ideaId) ? ` · ${ideas.find(idea => idea.id === event.ideaId)?.text}` : ""}</small>{event.sourceDocumentId && <Link className="workspace-source-link" href={`/?view=documents&documentId=${encodeURIComponent(event.sourceDocumentId)}`}>Open source document</Link>}<WorkflowConnect type="calendar" id={event.id} /></div></div>)}</div>}
               </section>
 
               <section className="workspace-panel outcome-panel"><div className="workspace-panel-heading"><div><span className="panel-kicker">LOOKING BACK</span><h2>Progress &amp; outcomes</h2></div><button type="button" className="panel-link" onClick={() => setTab("Outcomes")}>{tReview("title")} <ArrowRight size={13} /></button></div>
@@ -435,5 +486,5 @@ export default function WorkspacePage() {
 
 function TaskRow({ todo, ideas, onToggle }: { todo: PlannerTodo; ideas: IdeaRecord[]; onToggle: (id: string) => void }) {
   const linkedIdea = ideas.find(idea => idea.id === todo.ideaId);
-  return <div className={todo.status === "Done" ? "workspace-task-row done" : "workspace-task-row"}><button type="button" className="task-toggle" aria-label={todo.status === "Done" ? `Reopen ${todo.title}` : `Mark ${todo.title} complete`} onClick={() => onToggle(todo.id)}>{todo.status === "Done" ? <Check size={12} /> : <Circle size={15} />}</button><div className="task-row-copy"><b>{todo.title}</b><small>{todo.dueDate ? `Due ${formatDateOnly(todo.dueDate)}` : "No due date"}{linkedIdea ? ` · ${linkedIdea.text}` : ""}</small></div>{todo.status === "Done" ? <span className="task-row-status complete">Done</span> : <span className="task-row-status">Open</span>}</div>;
+  return <div className={todo.status === "Done" ? "workspace-task-row done" : "workspace-task-row"}><button type="button" className="task-toggle" aria-label={todo.status === "Done" ? `Reopen ${todo.title}` : `Mark ${todo.title} complete`} onClick={() => onToggle(todo.id)}>{todo.status === "Done" ? <Check size={12} /> : <Circle size={15} />}</button><div className="task-row-copy"><b>{todo.title}</b><small>{todo.dueDate ? `Due ${formatDateOnly(todo.dueDate)}` : "No due date"}{linkedIdea ? ` · ${linkedIdea.text}` : ""}</small>{todo.sourceDocumentId && <Link className="workspace-source-link" href={`/?view=documents&documentId=${encodeURIComponent(todo.sourceDocumentId)}`}>Open source document</Link>}</div>{todo.status === "Done" ? <span className="task-row-status complete">Done</span> : <span className="task-row-status">Open</span>}</div>;
 }

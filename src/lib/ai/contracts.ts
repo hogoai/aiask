@@ -572,14 +572,10 @@ export function validatePartnerResponse(value: unknown): PartnerResponse | null 
   if (!isRecord(value)
     || !isNonEmptyString(value.perspective, 1800)
     || !validateStringArray(value.questions, 3)
-    || value.questions.length < 1
     || !validateStringArray(value.risks, 3)
-    || value.risks.length < 1
     || !validateStringArray(value.opportunities, 3)
-    || value.opportunities.length < 1
     || !isNonEmptyString(value.nextStep, 1000)
-    || !validateStringArray(value.uncertainty, 3)
-    || value.uncertainty.length < 1) return null;
+    || !validateStringArray(value.uncertainty, 3)) return null;
 
   return {
     perspective: value.perspective.trim(),

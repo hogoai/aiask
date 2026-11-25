@@ -12,9 +12,17 @@ export default function AccountControl() {
   useEffect(() => {
     if (!isSupabaseConfigured()) return;
     const client = createClient();
-    void client.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? null));
+    let active = true;
+    void client.auth.getUser()
+      .then(({ data }) => { if (active) setEmail(data.user?.email ?? null); })
+      .catch(() => {
+        // Keep the sign-in fallback visible when the auth service cannot be reached.
+      });
     const { data: listener } = client.auth.onAuthStateChange((_event, session) => setEmail(session?.user.email ?? null));
-    return () => listener.subscription.unsubscribe();
+    return () => {
+      active = false;
+      listener.subscription.unsubscribe();
+    };
   }, []);
   if (!isSupabaseConfigured()) return <Link className="account-link" href="/login">Sign in</Link>;
   if (!email) return <Link className="account-link" href="/login">Sign in</Link>;

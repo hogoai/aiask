@@ -40,7 +40,8 @@ function ScopedBriefing({ records, userId }: { records: WorkspaceRecords; userId
       const date = item.date && formatDate(item.date);
       const time = item.time && new Intl.DateTimeFormat(locale, { timeStyle: "short", timeZone: "UTC" }).format(new Date("2000-01-01T" + item.time + ":00Z"));
       return <li key={item.key}><Link href={`/?view=${item.source}`}><strong>{title}</strong></Link>
-        <small>{[item.kind && t(`types.${item.kind}`), t(`sources.${item.source}`), date && (item.dateMeaning === "lastUpdate" ? t("lastUpdate", { date }) : date), time].filter(Boolean).join(" · ")}</small></li>;
+        <small>{[item.kind && t(`types.${item.kind}`), t(`sources.${item.source}`), date && (item.dateMeaning === "lastUpdate" ? t("lastUpdate", { date }) : date), time].filter(Boolean).join(" · ")}</small>
+        {item.sourceDocumentId && <small><Link href={`/?view=documents&documentId=${encodeURIComponent(item.sourceDocumentId)}`}>Open source document</Link></small>}</li>;
     })}</ul>;
   }
   const groups = [{ id: "dueToday", items: briefing.dueToday }, { id: "important", items: briefing.scheduled }, { id: "dueSoon", items: briefing.dueSoon }, { id: "followUps", items: briefing.followUps }] as const;

@@ -37,6 +37,8 @@ export function calendarFacts({ events, todos }: PlannerData) {
       key: JSON.stringify(["calendar", linked?.id ?? event.id, date, time ?? ""]),
       calendarId: event.id,
       title: event.title, source: "calendar", date, time, priority: linked?.priority ?? event.priority,
+      sourceDocumentId: linked?.sourceDocumentId ?? event.sourceDocumentId,
+      sourceDocumentTitle: linked?.sourceDocumentTitle ?? event.sourceDocumentTitle,
     });
   }
   return { calendar, calendarTodos, representedTodos };
@@ -94,6 +96,7 @@ export function smartFollowUps(
     results.push({
       key: JSON.stringify(["task-stale", todo.id, todo.updatedAt]), title: todo.title, source: "todos",
       date: localDateKey(updated), dateMeaning: "lastUpdate", priority: todo.priority, kind: "staleTodo", family: "deadline",
+      sourceDocumentId: todo.sourceDocumentId, sourceDocumentTitle: todo.sourceDocumentTitle,
     });
   }
 

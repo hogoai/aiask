@@ -29,6 +29,10 @@
   background: var(--brand);
 }
 
+.modal-backdrop {
+  z-index: 100;
+}
+
 @media (max-width: 640px) {
   .shared-site-nav .nav-links {
     white-space: normal;

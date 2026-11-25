@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import {
   ArrowDown, ArrowRight, ArrowUpRight, BrainCircuit, CalendarDays, ChartNoAxesCombined,
-  CheckCheck, Compass, Lightbulb, ListTodo, MessageCircleQuestion, MessageSquare, Sparkles,
+  CheckCheck, Compass, FileText, Lightbulb, ListTodo, MessageCircleQuestion, MessageSquare, Sparkles,
 } from "lucide-react";
 import type { HomeView } from "../lib/home-navigation";
 import { PARTNER_ROLE_ID } from "../lib/ai/contracts";
@@ -20,6 +20,7 @@ const tools = [
   { view: "calendar", title: "Calendar", label: "Make room for what matters.", icon: CalendarDays, text: "Keep your plans in view. Prepare for important events and pick up the follow-up afterward." },
   { view: "todos", title: "To-do", label: "A clear next step.", icon: ListTodo, text: "Give your actions a home. See what is coming up, what needs attention, and what you have already done." },
   { view: "inbox", title: "Notes & Ideas", label: "Capture Everything. Discover What Matters.", icon: Lightbulb, text: "Save a note, reflection, action item, or idea. Explore it with your AI Team when useful." },
+  { view: "documents", title: "Letters & Documents", label: "Keep important files close.", icon: FileText, text: "Save letters, photos, PDFs, and notes in a private library. Scan or explain them when you choose." },
 ] as const;
 
 const teamPartners = [

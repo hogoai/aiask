@@ -6,8 +6,8 @@ export type NoteType = "Quick Note" | "Idea" | "Reflection" | "Action Item";
 export type Priority = "urgent" | "attention" | "onTrack";
 export type IdeaRecord = { id: string; text: string; createdAt: string; updatedAt?: string; status?: IdeaStatus; nextStep?: string; progressUpdatedAt?: string; type?: NoteType };
 export type CalendarOrigin = "calendar" | "task-deadline";
-export type PlannerEvent = { ownerId?: string; completed?: boolean; id: string; ideaId: string | null; todoId: string | null; title: string; scheduledDate: string; scheduledTime: string | null; priority?: Priority; origin?: CalendarOrigin };
-export type PlannerTodo = { ownerId?: string; originConversationId?: string; id: string; ideaId: string | null; eventId: string | null; title: string; dueDate: string; status: "Open" | "Done"; priority?: Priority; completedAt?: string; updatedAt?: string };
+export type PlannerEvent = { ownerId?: string; completed?: boolean; id: string; ideaId: string | null; todoId: string | null; title: string; description?: string; scheduledDate: string; scheduledTime: string | null; priority?: Priority; origin?: CalendarOrigin; sourceDocumentId?: string; sourceDocumentTitle?: string };
+export type PlannerTodo = { ownerId?: string; originConversationId?: string; id: string; ideaId: string | null; eventId: string | null; title: string; description?: string; dueDate: string; status: "Open" | "Done"; priority?: Priority; completedAt?: string; updatedAt?: string; sourceDocumentId?: string; sourceDocumentTitle?: string };
 export type PlannerData = { events: PlannerEvent[]; todos: PlannerTodo[] };
 type Read<T> = { data: T; incomplete: boolean };
 export type WorkspaceRecords = { ideas: Read<IdeaRecord[]>; planner: Read<PlannerData> };
@@ -82,6 +82,7 @@ function dateKey(value: unknown): string {
 }
 
 function optionalText(value: unknown) { return typeof value === "string" ? value : undefined; }
+function optionalDocumentId(value: unknown) { return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value) ? value : undefined; }
 function priority(value: unknown): Priority | undefined {
   return value === "urgent" || value === "attention" || value === "onTrack" ? value : undefined;
 }
@@ -101,14 +102,14 @@ function readEvent(value: unknown): PlannerEvent | null {
   const time = value.scheduledTime;
   if (!scheduledDate || (time != null && (typeof time !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)))) return null;
   const origin = value.origin === "calendar" || value.origin === "task-deadline" ? value.origin : undefined;
-  return { ownerId: optionalText(value.ownerId), completed: typeof value.completed === "boolean" ? value.completed : undefined, id: value.id, title: value.title, scheduledDate, scheduledTime: typeof time === "string" ? time : null, todoId: optionalText(value.todoId) ?? null, ideaId: optionalText(value.ideaId) ?? null, priority: priority(value.priority), origin };
+  return { ownerId: optionalText(value.ownerId), completed: typeof value.completed === "boolean" ? value.completed : undefined, id: value.id, title: value.title, description: optionalText(value.description)?.slice(0, 1000), scheduledDate, scheduledTime: typeof time === "string" ? time : null, todoId: optionalText(value.todoId) ?? null, ideaId: optionalText(value.ideaId) ?? null, priority: priority(value.priority), origin, sourceDocumentId: optionalDocumentId(value.sourceDocumentId), sourceDocumentTitle: optionalText(value.sourceDocumentTitle)?.slice(0, 180) };
 }
 
 function readTodo(value: unknown): PlannerTodo | null {
   if (!isObject(value) || typeof value.id !== "string" || !value.id || typeof value.title !== "string" || (value.status !== "Open" && value.status !== "Done")) return null;
   const dueDate = dateKey(value.dueDate);
   if (value.dueDate && !dueDate) return null;
-  return { ownerId: optionalText(value.ownerId), originConversationId: optionalText(value.originConversationId), id: value.id, title: value.title, dueDate, status: value.status, eventId: optionalText(value.eventId) ?? null, ideaId: optionalText(value.ideaId) ?? null, priority: priority(value.priority), completedAt: optionalText(value.completedAt), updatedAt: optionalText(value.updatedAt) };
+  return { ownerId: optionalText(value.ownerId), originConversationId: optionalText(value.originConversationId), id: value.id, title: value.title, description: optionalText(value.description)?.slice(0, 1000), dueDate, status: value.status, eventId: optionalText(value.eventId) ?? null, ideaId: optionalText(value.ideaId) ?? null, priority: priority(value.priority), completedAt: optionalText(value.completedAt), updatedAt: optionalText(value.updatedAt), sourceDocumentId: optionalDocumentId(value.sourceDocumentId), sourceDocumentTitle: optionalText(value.sourceDocumentTitle)?.slice(0, 180) };
 }
 
 function readRows<T extends { id: string }>(value: unknown, read: (row: unknown) => T | null): Read<T[]> {

@@ -3,7 +3,7 @@ import { isDailyQuestionKind, isShortQuestion, type DailyQuestionKind } from "./
 import { isAppLocale, type AppLocale } from "../../i18n/config";
 import { calendarFacts, isImportant, smartFollowUps } from "./smart-follow-up";
 
-export type BriefingItem = { key: string; title: string; source: "todos" | "calendar" | "inbox"; date?: string; time?: string; priority?: Priority; kind?: DailyQuestionKind; relatedTitles?: string[]; dateMeaning?: "lastUpdate" };
+export type BriefingItem = { key: string; title: string; source: "todos" | "calendar" | "inbox"; date?: string; time?: string; priority?: Priority; kind?: DailyQuestionKind; relatedTitles?: string[]; dateMeaning?: "lastUpdate"; sourceDocumentId?: string; sourceDocumentTitle?: string };
 export type Candidate = BriefingItem & { kind: DailyQuestionKind; family: "deadline" | "calendar" | "idea" };
 
 const priorityRank = { urgent: 0, attention: 1, onTrack: 2 } as const;
@@ -41,7 +41,7 @@ export function buildDailyCheckIn(records: WorkspaceRecords, now: Date) {
     if (todo.status !== "Open" || !todo.dueDate || todo.dueDate > horizon || facts.representedTodos.has(todo.id)) continue;
     const date = todo.dueDate;
     const key = JSON.stringify(["deadline", todo.id, date]);
-    const item: BriefingItem = { key, title: todo.title, source: "todos", date, priority: todo.priority };
+    const item: BriefingItem = { key, title: todo.title, source: "todos", date, priority: todo.priority, sourceDocumentId: todo.sourceDocumentId, sourceDocumentTitle: todo.sourceDocumentTitle };
     const kind = date < today ? "overdue" : date === today ? "dueToday" : "dueSoon";
     if (kind === "overdue") followUps.push({ ...item, kind, family: "deadline" });
     else {
