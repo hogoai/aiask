@@ -1,7 +1,7 @@
 .workflow-connect { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0; max-width: 100%; }
-.workflow-connect button { border: 1px solid #d9d7e7; border-radius: 7px; padding: 6px 9px; background: #f6f5fc; color: #504680; font: inherit; font-size: 12px; cursor: pointer; }
+.workflow-connect button { border: 1px solid #d9d7e7; border-radius: 7px; padding: 6px 9px; background: #f6f5fc; color: #504680; font: inherit; font-size:var(--text-xs); cursor: pointer; }
 .workflow-connect button:disabled { opacity: .6; cursor: default; }
 .workflow-connect button:focus-visible { outline: 2px solid #6656b7; outline-offset: 2px; }
-.workflow-connect small { font-size: 12px; line-height: 1.5; }
+.workflow-connect small { font-size:var(--text-xs); line-height: 1.5; }
 .workflow-connect a { color: #5d4b9c; }
-.workflow-connect label { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.workflow-connect label { display: inline-flex; align-items: center; gap: 5px; font-size:var(--text-xs); }

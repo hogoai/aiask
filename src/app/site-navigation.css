@@ -1,12 +1,12 @@
 .shared-site-nav {
   position: relative;
   z-index: 20;
-  gap: 18px;
+  gap: 8px;
 }
 
 .shared-site-nav .nav-links {
-  gap: clamp(10px, 1.45vw, 22px);
-  white-space: nowrap;
+  gap: clamp(6px, 0.65vw, 10px);
+  white-space: normal;
 }
 
 .shared-site-nav .nav-links a[aria-current="page"]:not(.nav-cta) {
@@ -15,8 +15,8 @@
 }
 
 .shared-site-nav .nav-links .nav-cta {
-  gap: 7px;
-  padding: 11px 13px;
+  gap: 6px;
+  padding: 8px 9px;
 }
 
 .shared-site-nav .nav-links .share-cta {

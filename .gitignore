@@ -18,3 +18,6 @@ out
 *.key
 *.p12
 *.pfx
+
+# Local Claude outputs
+/Claude outputs/
